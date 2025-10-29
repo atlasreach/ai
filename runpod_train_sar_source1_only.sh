@@ -69,13 +69,14 @@ echo ""
 echo "Step 2: Installing SimpleTuner (Flux-compatible)..."
 cd /workspace
 
-# SimpleTuner uses pip install, not requirements.txt
-if ! python -c "import simpletuner" 2>/dev/null; then
-    echo "Installing SimpleTuner via pip..."
-    pip install -q simpletuner[cuda]
+if [ ! -d "SimpleTuner" ]; then
+    git clone https://github.com/bghira/SimpleTuner.git
+    cd SimpleTuner
+    pip install -q -e .  # Install in editable mode from source
     echo "✓ SimpleTuner installed"
+    cd /workspace
 else
-    echo "✓ SimpleTuner already installed"
+    echo "✓ SimpleTuner already exists"
 fi
 
 # Create training config
