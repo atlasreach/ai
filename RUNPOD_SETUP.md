@@ -13,15 +13,13 @@ Quick guide to train a LoRA model on RunPod using images from S3.
 
 ### 2. Set AWS Credentials
 
-Once your pod starts, open a terminal and run:
+**COPY THIS ONE COMMAND** (get keys from your local `.env` file):
 
 ```bash
-export AWS_ACCESS_KEY_ID='YOUR_AWS_ACCESS_KEY'
-export AWS_SECRET_ACCESS_KEY='YOUR_AWS_SECRET_KEY'
-export AWS_REGION='us-east-2'
+export AWS_ACCESS_KEY_ID='your_key_here' AWS_SECRET_ACCESS_KEY='your_secret_here' AWS_REGION='us-east-2'
 ```
 
-(Get your keys from `.env` in the repo)
+Replace `your_key_here` and `your_secret_here` with your actual AWS credentials.
 
 ### 3. Clone Repository
 

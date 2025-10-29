@@ -29,10 +29,8 @@ else
     echo "  ✓ Kohya_ss already installed"
 fi
 
-# Install xformers for faster training
-echo "  • Installing xformers..."
-pip install -q xformers
-echo "  ✓ xformers installed"
+# Skip xformers - use SDPA instead (built into PyTorch, no install needed)
+echo "  ✓ Using SDPA for attention (built-in, fast)"
 
 # Step 3: Verify dataset exists
 echo -e "\n[3/5] Verifying dataset..."
@@ -123,7 +121,7 @@ python sdxl_train_network.py \
     --max_train_epochs=10 \
     --learning_rate=1e-4 \
     --optimizer_type="AdamW8bit" \
-    --xformers \
+    --sdpa \
     --mixed_precision="fp16" \
     --cache_latents \
     --gradient_checkpointing \
