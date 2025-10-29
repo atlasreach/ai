@@ -29,6 +29,11 @@ else
     echo "  ✓ Kohya_ss already installed"
 fi
 
+# Install xformers for faster training
+echo "  • Installing xformers..."
+pip install -q xformers
+echo "  ✓ xformers installed"
+
 # Step 3: Verify dataset exists
 echo -e "\n[3/5] Verifying dataset..."
 if [ ! -d "/workspace/lora_training/10_sar woman" ]; then
