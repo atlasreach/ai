@@ -24,6 +24,10 @@ class S3Manager:
             config=Config(signature_version='s3v4', s3={'addressing_style': 'virtual'})
         )
 
+        # Verify bucket exists, create if needed
+        if self.bucket_name:
+            self._ensure_bucket_exists()
+
     def create_bucket(self, model_name):
         """Create S3 bucket with timestamp"""
         timestamp = int(datetime.now().timestamp())
@@ -67,6 +71,23 @@ class S3Manager:
 
         except Exception as e:
             raise RuntimeError(f"Failed to create bucket: {e}")
+
+    def _ensure_bucket_exists(self):
+        """Check if bucket exists, create if it doesn't"""
+        try:
+            self.client.head_bucket(Bucket=self.bucket_name)
+        except:
+            # Bucket doesn't exist, create it
+            try:
+                if self.region == 'us-east-1':
+                    self.client.create_bucket(Bucket=self.bucket_name)
+                else:
+                    self.client.create_bucket(
+                        Bucket=self.bucket_name,
+                        CreateBucketConfiguration={'LocationConstraint': self.region}
+                    )
+            except Exception as e:
+                print(f"⚠ Warning: Could not create bucket {self.bucket_name}: {e}")
 
     def upload_file(self, filepath, s3_key, content_type='image/jpeg'):
         """Upload file to S3 and return presigned URL"""

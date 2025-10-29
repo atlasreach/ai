@@ -26,7 +26,8 @@ class ProgressTracker:
                 'stages': {
                     'upload': {'completed': False, 'timestamp': None},
                     'swap': {'completed': False, 'timestamp': None},
-                    'enhance': {'completed': False, 'timestamp': None}
+                    'enhance': {'completed': False, 'timestamp': None},
+                    'caption': {'completed': False, 'timestamp': None}
                 },
                 'tasks': {}
             }
@@ -111,19 +112,23 @@ class ProgressTracker:
 
         total = len(tasks)
         if total == 0:
-            return {'total': 0, 'swap': 0, 'enhance': 0}
+            return {'total': 0, 'swap': 0, 'enhance': 0, 'caption': 0, 'swap_pct': 0, 'enhance_pct': 0, 'caption_pct': 0}
 
         swap_completed = sum(1 for t in tasks.values()
                            if t.get('swap', {}).get('completed', False))
         enhance_completed = sum(1 for t in tasks.values()
                               if t.get('enhance', {}).get('completed', False))
+        caption_completed = sum(1 for t in tasks.values()
+                              if t.get('caption', {}).get('completed', False))
 
         return {
             'total': total,
             'swap': swap_completed,
             'enhance': enhance_completed,
+            'caption': caption_completed,
             'swap_pct': int(swap_completed / total * 100) if total > 0 else 0,
-            'enhance_pct': int(enhance_completed / total * 100) if total > 0 else 0
+            'enhance_pct': int(enhance_completed / total * 100) if total > 0 else 0,
+            'caption_pct': int(caption_completed / total * 100) if total > 0 else 0
         }
 
     def reset(self):
@@ -135,7 +140,8 @@ class ProgressTracker:
             'stages': {
                 'upload': {'completed': False, 'timestamp': None},
                 'swap': {'completed': False, 'timestamp': None},
-                'enhance': {'completed': False, 'timestamp': None}
+                'enhance': {'completed': False, 'timestamp': None},
+                'caption': {'completed': False, 'timestamp': None}
             },
             'tasks': {}
         }

@@ -1,0 +1,31 @@
+{
+  "model_name": "sar",
+  "created_at": "2025-10-29T07:55:03.837413",
+  "bucket_name": "sar-workflow-1761724503",
+  "settings": {
+    "enhancement_level": 2,
+    "auto_upload_s3": true,
+    "keep_intermediate": true
+  },
+  "sources": [
+    {
+      "id": 1,
+      "filename": "sar-s1-original.jpg",
+      "original_name": "sar-s1-original.jpg"
+    },
+    {
+      "id": 2,
+      "filename": "sar-s2-original.jpg",
+      "original_name": "sar-s2-original.jpg"
+    }
+  ],
+  "processing_history": {
+    "nsfw": {
+      "targets_processed": 14,
+      "last_run": "2025-10-29T09:19:45.540145"
+    },
+    "sfw": {
+      "targets_processed": 0
+    }
+  }
+}

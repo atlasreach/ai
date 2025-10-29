@@ -1,1 +1,13 @@
 .env
+
+# Model results (stored in S3)
+models/*/results/
+models/*/lora_training/
+
+# State files
+models/*/progress.json
+
+# Temporary files
+*.pyc
+__pycache__/
+test_s3_connection.py

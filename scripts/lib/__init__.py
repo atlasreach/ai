@@ -17,10 +17,12 @@ from .file_utils import (
     update_processing_history,
     list_all_models,
     model_exists,
-    get_model_status
+    get_model_status,
+    list_uninitialized_models
 )
 from .face_detector import FaceDetector
 from .progress import ProgressTracker
+from .image_utils import resize_image
 
 __all__ = [
     'S3Manager',
@@ -30,6 +32,7 @@ __all__ = [
     'image_to_base64',
     'base64_to_image',
     'download_image',
+    'resize_image',
     'get_smart_filename',
     'get_model_path',
     'get_source_path',
@@ -44,5 +47,6 @@ __all__ = [
     'update_processing_history',
     'list_all_models',
     'model_exists',
-    'get_model_status'
+    'get_model_status',
+    'list_uninitialized_models'
 ]

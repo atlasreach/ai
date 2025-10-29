@@ -79,8 +79,17 @@ def list_source_images(model_name):
     if not source_dir.exists():
         return []
 
+    # Get all image files (jpg, jpeg, png)
+    all_files = []
+    all_files.extend(source_dir.glob('*.jpg'))
+    all_files.extend(source_dir.glob('*.jpeg'))
+    all_files.extend(source_dir.glob('*.png'))
+    all_files.extend(source_dir.glob('*.JPG'))
+    all_files.extend(source_dir.glob('*.JPEG'))
+    all_files.extend(source_dir.glob('*.PNG'))
+
     sources = []
-    for i, filepath in enumerate(sorted(source_dir.glob('*.jpg')), start=1):
+    for i, filepath in enumerate(sorted(all_files), start=1):
         sources.append((i, filepath.name, str(filepath)))
 
     return sources
@@ -97,8 +106,17 @@ def list_target_images(model_name, content_type):
     if not targets_dir.exists():
         return []
 
+    # Get all image files (jpg, jpeg, png)
+    all_files = []
+    all_files.extend(targets_dir.glob('*.jpg'))
+    all_files.extend(targets_dir.glob('*.jpeg'))
+    all_files.extend(targets_dir.glob('*.png'))
+    all_files.extend(targets_dir.glob('*.JPG'))
+    all_files.extend(targets_dir.glob('*.JPEG'))
+    all_files.extend(targets_dir.glob('*.PNG'))
+
     targets = []
-    for i, filepath in enumerate(sorted(targets_dir.glob('*.jpg')), start=1):
+    for i, filepath in enumerate(sorted(all_files), start=1):
         targets.append((i, filepath.name, str(filepath)))
 
     return targets
@@ -230,3 +248,29 @@ def get_model_status(model_name):
         'nsfw_results_count': len(nsfw_results),
         'sfw_results_count': len(sfw_results)
     }
+
+
+def list_uninitialized_models():
+    """
+    List models that have images but no config.json
+    (i.e., pending initialization)
+
+    Returns:
+        list of model names
+    """
+    models_dir = Path('models')
+    if not models_dir.exists():
+        return []
+
+    uninitialized = []
+    for model_dir in models_dir.iterdir():
+        if not model_dir.is_dir():
+            continue
+
+        model_name = model_dir.name
+
+        # Has images but no config = uninitialized
+        if model_exists(model_name) and not load_config(model_name):
+            uninitialized.append(model_name)
+
+    return sorted(uninitialized)

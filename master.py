@@ -462,21 +462,11 @@ def process_model(model_name, content_type):
         input("\nPress Enter to continue...")
         return
 
-    # Create task pairs (match targets to their source by filename)
+    # Create task pairs (all combinations of sources × targets)
     task_pairs = []
-    for target_id, target_filename, target_filepath in targets:
-        # Extract source ID from target filename (e.g., "alex-s1-t1-nsfw-original.jpg" → source_id=1)
-        if f'-s' in target_filename and f'-t' in target_filename:
-            parts = target_filename.split('-')
-            for i, part in enumerate(parts):
-                if part.startswith('s') and part[1:].isdigit():
-                    source_id = int(part[1:])
-                    # Find matching source
-                    for src_id, src_filename, src_filepath in sources:
-                        if src_id == source_id:
-                            task_pairs.append((src_id, target_id, src_filename, src_filepath, target_filename, target_filepath))
-                            break
-                    break
+    for source_id, source_filename, source_filepath in sources:
+        for target_id, target_filename, target_filepath in targets:
+            task_pairs.append((source_id, target_id, source_filename, source_filepath, target_filename, target_filepath))
 
     print(f"Sources: {len(sources)}")
     print(f"Targets: {len(targets)}")

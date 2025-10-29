@@ -1,0 +1,31 @@
+{
+  "model_name": "jade",
+  "created_at": "2025-10-29T05:09:53.960902",
+  "bucket_name": "jade-workflow-1761714593",
+  "settings": {
+    "enhancement_level": 2,
+    "auto_upload_s3": true,
+    "keep_intermediate": true
+  },
+  "sources": [
+    {
+      "id": 1,
+      "filename": "jade-s1-original.jpg",
+      "original_name": "jade-s1-original.jpg"
+    },
+    {
+      "id": 2,
+      "filename": "jade-s2-original.jpg",
+      "original_name": "jade-s2-original.jpg"
+    }
+  ],
+  "processing_history": {
+    "nsfw": {
+      "targets_processed": 32,
+      "last_run": "2025-10-29T05:39:52.674489"
+    },
+    "sfw": {
+      "targets_processed": 0
+    }
+  }
+}
