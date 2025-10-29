@@ -27,37 +27,12 @@ else
     echo "  ✓ Kohya_ss already installed"
 fi
 
-# Step 3: Upload dataset instructions
-echo -e "\n[3/6] Checking for dataset..."
-if [ ! -f "/workspace/jade_lora_dataset.zip" ]; then
-    echo ""
-    echo "⚠ Dataset not found!"
-    echo ""
-    echo "Please upload jade_lora_dataset.zip to RunPod:"
-    echo ""
-    echo "Option A - Using Web Terminal:"
-    echo "  1. Click 'Upload' button (top right)"
-    echo "  2. Select: /workspaces/ai/models/jade/jade_lora_dataset.zip"
-    echo "  3. Upload to: /workspace/"
-    echo ""
-    echo "Option B - Using SCP from local machine:"
-    echo "  scp -i ~/.ssh/id_ed25519 /workspaces/ai/models/jade/jade_lora_dataset.zip w76u042vchb6p3-64411d6d@ssh.runpod.io:/workspace/"
-    echo ""
-    echo "After uploading, run this script again:"
-    echo "  bash runpod_setup.sh"
-    echo ""
-    exit 1
-fi
-
-echo "  ✓ Dataset found"
-
-# Step 4: Extract dataset
-echo -e "\n[4/6] Extracting dataset..."
+# Step 3: Prepare dataset from repo
+echo -e "\n[3/6] Preparing dataset from git repo..."
 if [ ! -d "/workspace/lora_training" ]; then
-    unzip -q jade_lora_dataset.zip
-    echo "  ✓ Extracted to /workspace/lora_training/"
+    bash /workspace/ai/runpod_prepare_dataset.sh
 else
-    echo "  ✓ Already extracted"
+    echo "  ✓ Dataset already prepared"
 fi
 
 # Verify images
@@ -72,8 +47,8 @@ if [ "$IMAGE_COUNT" -eq 0 ]; then
     exit 1
 fi
 
-# Step 5: Create training config
-echo -e "\n[5/6] Creating training configuration..."
+# Step 4: Create training config
+echo -e "\n[4/5] Creating training configuration..."
 
 cat > /workspace/jade_config.toml << 'EOF'
 [model_arguments]
@@ -120,8 +95,8 @@ EOF
 
 echo "  ✓ Config saved to /workspace/jade_config.toml"
 
-# Step 6: Ready to train
-echo -e "\n[6/6] Setup Complete!"
+# Step 5: Ready to train
+echo -e "\n[5/5] Setup Complete!"
 echo ""
 echo "=========================================="
 echo "  Ready to Train!"
