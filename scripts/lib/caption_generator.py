@@ -120,8 +120,17 @@ Be explicit and anatomically precise for NSFW content. Don't repeat basic info -
 
         # Always upload to S3 for backup/reference
         try:
-            # Remove 'models/' prefix for S3 key
-            s3_key = str(txt_path).replace('models/', '')
+            # Remove 'models/{model_name}/' prefix for S3 key
+            # e.g., 'models/sar/results/nsfw/...' → 'results/nsfw/...'
+            txt_path_str = str(txt_path).replace('\\', '/')
+            parts = txt_path_str.split('/')
+            if 'models' in parts and 'results' in parts:
+                results_idx = parts.index('results')
+                s3_key = '/'.join(parts[results_idx:])
+            else:
+                # Fallback: just remove 'models/' prefix
+                s3_key = txt_path_str.replace('models/', '')
+
             s3_url = s3_manager.upload_file(str(txt_path), s3_key, 'text/plain')
             return s3_url
         except Exception as e:
