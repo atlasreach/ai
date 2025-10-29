@@ -20,6 +20,8 @@ if [ ! -d "kohya_ss" ]; then
     echo "  • Cloning Kohya_ss..."
     git clone https://github.com/bmaltais/kohya_ss.git
     cd kohya_ss
+    echo "  • Cloning sd-scripts submodule..."
+    git submodule update --init --recursive
     echo "  • Installing requirements..."
     pip install -q -r requirements.txt
     cd /workspace
