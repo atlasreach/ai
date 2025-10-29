@@ -87,9 +87,8 @@ network_alpha = 16
 
 [[datasets]]
 [[datasets.subsets]]
-image_dir = "/workspace/lora_training/images"
+image_dir = "/workspace/lora_training/10_sar woman"
 caption_extension = ".txt"
-num_repeats = 10
 shuffle_caption = false
 keep_tokens = 2
 EOF
@@ -111,7 +110,7 @@ echo "=========================================="
 
 python sdxl_train_network.py \
     --pretrained_model_name_or_path="stabilityai/stable-diffusion-xl-base-1.0" \
-    --train_data_dir="/workspace/lora_training/images" \
+    --train_data_dir="/workspace/lora_training" \
     --output_dir="/workspace/sar_lora_output" \
     --output_name="sar-v1" \
     --save_model_as="safetensors" \
@@ -131,11 +130,11 @@ python sdxl_train_network.py \
     --train_batch_size=1 \
     --lr_scheduler="cosine" \
     --caption_extension=".txt" \
-    --shuffle_caption \
     --keep_tokens=2 \
     --bucket_reso_steps=64 \
     --min_bucket_reso=256 \
-    --max_bucket_reso=1024
+    --max_bucket_reso=1024 \
+    --enable_bucket
 
 echo ""
 echo "=========================================="

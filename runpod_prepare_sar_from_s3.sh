@@ -37,28 +37,29 @@ if ! command -v aws &> /dev/null; then
     pip install -q awscli
 fi
 
-# Create training directory
-mkdir -p "$TRAINING_DIR/images"
+# Create training directory with Kohya-required structure
+# Format: <repeats>_<trigger_word>/
+mkdir -p "$TRAINING_DIR/10_sar woman"
 
 # Download enhanced images and captions from S3
 echo "Downloading enhanced images + captions..."
 
 # Download all enhanced images for sar from both source_1 and source_2
-aws s3 sync "s3://$BUCKET_NAME/results/nsfw/source_1/enhanced/" "$TRAINING_DIR/images/" \
+aws s3 sync "s3://$BUCKET_NAME/results/nsfw/source_1/enhanced/" "$TRAINING_DIR/10_sar woman/" \
     --exclude "*" \
     --include "sar-*-enhanced.jpg" \
     --include "sar-*-enhanced.txt" \
     --region "${AWS_REGION:-us-east-2}"
 
-aws s3 sync "s3://$BUCKET_NAME/results/nsfw/source_2/enhanced/" "$TRAINING_DIR/images/" \
+aws s3 sync "s3://$BUCKET_NAME/results/nsfw/source_2/enhanced/" "$TRAINING_DIR/10_sar woman/" \
     --exclude "*" \
     --include "sar-*-enhanced.jpg" \
     --include "sar-*-enhanced.txt" \
     --region "${AWS_REGION:-us-east-2}"
 
 # Count what we got
-IMAGE_COUNT=$(ls -1 "$TRAINING_DIR/images/"*.jpg 2>/dev/null | wc -l)
-CAPTION_COUNT=$(ls -1 "$TRAINING_DIR/images/"*.txt 2>/dev/null | wc -l)
+IMAGE_COUNT=$(ls -1 "$TRAINING_DIR/10_sar woman/"*.jpg 2>/dev/null | wc -l)
+CAPTION_COUNT=$(ls -1 "$TRAINING_DIR/10_sar woman/"*.txt 2>/dev/null | wc -l)
 
 echo "✓ Downloaded $IMAGE_COUNT images"
 echo "✓ Downloaded $CAPTION_COUNT captions"
@@ -79,7 +80,7 @@ fi
 echo ""
 echo "Verifying dataset..."
 MISSING_CAPTIONS=0
-for img in "$TRAINING_DIR/images/"*.jpg; do
+for img in "$TRAINING_DIR/10_sar woman/"*.jpg; do
     caption="${img%.jpg}.txt"
     if [ ! -f "$caption" ]; then
         echo "  ⚠ Missing caption: $(basename $caption)"
@@ -117,7 +118,7 @@ echo "✓ Config created"
 # Show sample caption
 echo ""
 echo "Sample caption:"
-FIRST_CAPTION=$(ls "$TRAINING_DIR/images/"*.txt 2>/dev/null | head -1)
+FIRST_CAPTION=$(ls "$TRAINING_DIR/10_sar woman/"*.txt 2>/dev/null | head -1)
 if [ -f "$FIRST_CAPTION" ]; then
     echo "---"
     head -n 3 "$FIRST_CAPTION"
