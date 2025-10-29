@@ -29,12 +29,16 @@ from lib import (
     save_config,
     create_default_config,
     list_all_models,
+    list_uninitialized_models,
     get_smart_filename,
     get_source_path,
     get_targets_path,
     get_results_path,
-    update_processing_history
+    update_processing_history,
+    get_model_status
 )
+from lib.image_utils_smart import resize_image
+from lib.caption_generator import CaptionGenerator
 
 # Load environment variables
 load_dotenv()
@@ -90,33 +94,98 @@ def main_menu():
 
 
 def create_new_model():
-    """Create new model workflow"""
+    """Create new model workflow - initialize models with images"""
     clear_screen()
     print_header("Create New Model")
 
-    # Step 1: Model name
-    model_name = input("Enter model name (lowercase, no spaces): ").strip().lower()
-    if not model_name or ' ' in model_name:
-        print("✗ Invalid model name")
+    # Check for uninitialized models (have images but no config)
+    uninitialized = list_uninitialized_models()
+
+    if uninitialized:
+        print("📂 Found models with images (not yet initialized):\n")
+        for i, model in enumerate(uninitialized, 1):
+            status = get_model_status(model)
+            print(f"  [{i}] {model}")
+            print(f"      • Sources: {status['source_count']}")
+            print(f"      • NSFW targets: {status['nsfw_target_count']}")
+            print(f"      • SFW targets: {status['sfw_target_count']}")
+            print()
+
+        print(f"  [{len(uninitialized) + 1}] Create brand new model (enter name manually)")
+        print()
+
+        valid_choices = [str(i) for i in range(1, len(uninitialized) + 2)]
+        choice = get_input(f"Choose option", valid_choices)
+
+        if choice == '0':
+            return
+
+        choice_idx = int(choice) - 1
+
+        if choice_idx < len(uninitialized):
+            # Initialize existing model
+            model_name = uninitialized[choice_idx]
+        else:
+            # Manual entry
+            model_name = input("\nEnter model name (lowercase, no spaces): ").strip().lower()
+            if not model_name or ' ' in model_name:
+                print("✗ Invalid model name")
+                input("\nPress Enter to continue...")
+                return
+
+            # Check if already exists
+            all_models = list_all_models()
+            if model_name in all_models:
+                config = load_config(model_name)
+                if config:
+                    print(f"✗ Model '{model_name}' already initialized")
+                    input("\nPress Enter to continue...")
+                    return
+
+            # Create directories for new model
+            print(f"\nCreating directories for '{model_name}'...")
+            ensure_directories(model_name)
+            print("✓ Directories created")
+            print(f"\n📁 Next: Drop images into:")
+            print(f"   • models/{model_name}/source/")
+            print(f"   • models/{model_name}/targets/nsfw/")
+            print(f"   • models/{model_name}/targets/sfw/")
+            print(f"\nThen run this command again to initialize!")
+            input("\nPress Enter to continue...")
+            return
+    else:
+        # No uninitialized models, manual entry
+        model_name = input("Enter model name (lowercase, no spaces): ").strip().lower()
+        if not model_name or ' ' in model_name:
+            print("✗ Invalid model name")
+            input("\nPress Enter to continue...")
+            return
+
+        # Check if already exists
+        all_models = list_all_models()
+        if model_name in all_models:
+            config = load_config(model_name)
+            if config:
+                print(f"✗ Model '{model_name}' already initialized")
+                input("\nPress Enter to continue...")
+                return
+
+        # Create directories for new model
+        print(f"\nCreating directories for '{model_name}'...")
+        ensure_directories(model_name)
+        print("✓ Directories created")
+        print(f"\n📁 Next: Drop images into:")
+        print(f"   • models/{model_name}/source/")
+        print(f"   • models/{model_name}/targets/nsfw/")
+        print(f"   • models/{model_name}/targets/sfw/")
+        print(f"\nThen run this command again to initialize!")
         input("\nPress Enter to continue...")
         return
 
-    # Check if exists
-    if model_name in list_all_models():
-        print(f"✗ Model '{model_name}' already exists")
-        input("\nPress Enter to continue...")
-        return
-
-    # Step 2: Create directories
-    print(f"\nCreating directories for '{model_name}'...")
-    ensure_directories(model_name)
-    print("✓ Directories created")
-
-    # Step 3: Upload source images
-    print("\n--- Source Images ---")
-    print("Copy your source face images to: models/{model_name}/source/")
-    print("Supported: .jpg files only")
-    input("\nPress Enter when ready...")
+    # Initialize the selected model
+    print(f"\n{'=' * 60}")
+    print(f"  Initializing '{model_name}'")
+    print(f"{'=' * 60}\n")
 
     # Validate source images
     detector = FaceDetector()
@@ -127,7 +196,7 @@ def create_new_model():
         input("\nPress Enter to continue...")
         return
 
-    print(f"\nValidating {len(sources)} source image(s)...")
+    print(f"Validating {len(sources)} source image(s)...")
     valid_sources = []
     for source_id, filename, filepath in sources:
         success, message = detector.validate_image(filepath)
@@ -140,82 +209,100 @@ def create_new_model():
         input("\nPress Enter to continue...")
         return
 
-    print(f"\n✓ {len(valid_sources)} valid source image(s)")
+    print(f"✓ {len(valid_sources)} valid source image(s)")
 
-    # Step 4: Choose content type
-    print("\n--- Target Images ---")
-    print_menu({
-        '1': 'NSFW targets',
-        '2': 'SFW targets',
-        '3': 'Both'
-    })
-    content_choice = get_input("Choose content type", ['1', '2', '3'])
+    # Rename sources to smart format
+    print("\n--- Renaming Source Files ---")
+    source_dir = get_source_path(model_name)
+    renamed_sources = []
 
+    for source_id, filename, filepath in valid_sources:
+        old_path = Path(filepath)
+        new_filename = f"{model_name}-s{source_id}-original.jpg"
+        new_path = source_dir / new_filename
+
+        if old_path != new_path:
+            shutil.move(str(old_path), str(new_path))
+            print(f"  ✓ {filename} → {new_filename}")
+            renamed_sources.append((source_id, new_filename, str(new_path)))
+        else:
+            renamed_sources.append((source_id, filename, filepath))
+
+    valid_sources = renamed_sources
+
+    # Duplicate and rename targets for each source combination
+    print("\n--- Creating Target Combinations ---")
+
+    # Get list of content types with targets
     content_types = []
-    if content_choice == '1':
-        content_types = ['nsfw']
-    elif content_choice == '2':
-        content_types = ['sfw']
-    else:
-        content_types = ['nsfw', 'sfw']
+    nsfw_targets_dir = get_targets_path(model_name, 'nsfw')
+    sfw_targets_dir = get_targets_path(model_name, 'sfw')
 
-    # Step 5: Upload target images for each type
+    if nsfw_targets_dir.exists() and list(nsfw_targets_dir.glob('*.[jp][pn]g')) + list(nsfw_targets_dir.glob('*.jpeg')):
+        content_types.append('nsfw')
+    if sfw_targets_dir.exists() and list(sfw_targets_dir.glob('*.[jp][pn]g')) + list(sfw_targets_dir.glob('*.jpeg')):
+        content_types.append('sfw')
+
     for content_type in content_types:
-        print(f"\nCopy your {content_type.upper()} target images to:")
-        print(f"  models/{model_name}/targets/{content_type}/")
-        input("Press Enter when ready...")
+        print(f"\nProcessing {content_type.upper()} targets...")
+        targets_dir = get_targets_path(model_name, content_type)
 
-        # Validate targets
-        targets = list_target_images(model_name, content_type)
-        if not targets:
-            print(f"⚠ No {content_type.upper()} targets found, skipping...")
+        # Get original target files
+        original_targets = sorted([
+            f for f in targets_dir.iterdir()
+            if f.suffix.lower() in ['.jpg', '.jpeg', '.png']
+        ])
+
+        if not original_targets:
             continue
 
-        print(f"\nValidating {len(targets)} {content_type.upper()} target(s)...")
-        valid_targets = []
-        for target_id, filename, filepath in targets:
-            success, message = detector.validate_image(filepath)
-            print(f"  {message}: {filename}")
-            if success:
-                valid_targets.append((target_id, filename, filepath))
+        print(f"  Found {len(original_targets)} target files")
+        print(f"  Creating {len(valid_sources)} × {len(original_targets)} = {len(valid_sources) * len(original_targets)} combinations...")
 
-        print(f"✓ {len(valid_targets)} valid {content_type.upper()} target(s)")
+        # Create combinations
+        new_target_files = []
+        for source_id, _, _ in valid_sources:
+            for target_idx, target_file in enumerate(original_targets, 1):
+                new_filename = f"{model_name}-s{source_id}-t{target_idx}-{content_type}-original.jpg"
+                new_path = targets_dir / new_filename
 
-    # Step 6: Create S3 bucket
-    print("\n--- S3 Bucket ---")
-    create_bucket = get_input("Create new S3 bucket? (y/n)", ['y', 'n'])
+                # Copy original to new combination name
+                shutil.copy2(str(target_file), str(new_path))
+                new_target_files.append(new_path)
 
-    bucket_name = None
-    if create_bucket == 'y':
-        print("Creating S3 bucket...")
-        try:
-            s3 = S3Manager()
-            bucket_name = s3.create_bucket(model_name)
-            print(f"✓ Bucket created: {bucket_name}")
+        # Delete original generic target files
+        for original_file in original_targets:
+            original_file.unlink()
 
-            # Update .env
-            with open('.env', 'r') as f:
-                lines = f.readlines()
-            with open('.env', 'w') as f:
-                updated = False
-                for line in lines:
-                    if line.startswith('AWS_S3_BUCKET='):
-                        f.write(f'AWS_S3_BUCKET={bucket_name}\n')
-                        updated = True
-                    else:
-                        f.write(line)
-                if not updated:
-                    f.write(f'\nAWS_S3_BUCKET={bucket_name}\n')
+        print(f"  ✓ Created {len(new_target_files)} target combinations")
+        print(f"  ✓ Removed {len(original_targets)} original files")
 
-        except Exception as e:
-            print(f"✗ Failed to create bucket: {e}")
-            bucket_name = input("Enter existing bucket name: ").strip()
-    else:
-        bucket_name = os.getenv('AWS_S3_BUCKET')
-        if not bucket_name:
-            bucket_name = input("Enter bucket name: ").strip()
+    # Create S3 bucket (always create for new models)
+    print("\n--- Creating S3 Bucket ---")
+    try:
+        s3 = S3Manager()
+        bucket_name = s3.create_bucket(model_name)
+        print(f"✓ Bucket created: {bucket_name}")
 
-    # Step 7: Create config
+        # Update .env
+        with open('.env', 'r') as f:
+            lines = f.readlines()
+        with open('.env', 'w') as f:
+            updated = False
+            for line in lines:
+                if line.startswith('AWS_S3_BUCKET='):
+                    f.write(f'AWS_S3_BUCKET={bucket_name}\n')
+                    updated = True
+                else:
+                    f.write(line)
+            if not updated:
+                f.write(f'\nAWS_S3_BUCKET={bucket_name}\n')
+
+    except Exception as e:
+        print(f"✗ Failed to create bucket: {e}")
+        bucket_name = input("Enter existing bucket name: ").strip()
+
+    # Create config
     config = create_default_config(model_name, bucket_name)
     config['sources'] = [
         {'id': sid, 'filename': fname, 'original_name': fname}
@@ -223,9 +310,10 @@ def create_new_model():
     ]
     save_config(model_name, config)
 
-    print(f"\n✓ Model '{model_name}' created successfully!")
+    print(f"\n✓ Model '{model_name}' initialized successfully!")
     print(f"✓ Config saved to: models/{model_name}/config.json")
-    print(f"\nNext: Use option 2 to process this model")
+    print(f"✓ S3 bucket: {bucket_name}")
+    print(f"\n📋 Next: Use option [2] to process this model")
 
     input("\nPress Enter to continue...")
 
@@ -374,20 +462,43 @@ def process_model(model_name, content_type):
         input("\nPress Enter to continue...")
         return
 
+    # Create task pairs (match targets to their source by filename)
+    task_pairs = []
+    for target_id, target_filename, target_filepath in targets:
+        # Extract source ID from target filename (e.g., "alex-s1-t1-nsfw-original.jpg" → source_id=1)
+        if f'-s' in target_filename and f'-t' in target_filename:
+            parts = target_filename.split('-')
+            for i, part in enumerate(parts):
+                if part.startswith('s') and part[1:].isdigit():
+                    source_id = int(part[1:])
+                    # Find matching source
+                    for src_id, src_filename, src_filepath in sources:
+                        if src_id == source_id:
+                            task_pairs.append((src_id, target_id, src_filename, src_filepath, target_filename, target_filepath))
+                            break
+                    break
+
     print(f"Sources: {len(sources)}")
     print(f"Targets: {len(targets)}")
-    print(f"Total combinations: {len(sources) * len(targets)}")
+    print(f"Total combinations: {len(task_pairs)}")
     print()
 
-    # Initialize progress tracking
-    source_ids = [s[0] for s in sources]
-    target_ids = [t[0] for t in targets]
-    tracker.initialize_tasks(source_ids, target_ids, content_type)
+    # Initialize progress tracking with actual task pairs only
+    for source_id, target_id, _, _, _, _ in task_pairs:
+        task_key = tracker.get_task_key(source_id, target_id, content_type)
+        if task_key not in tracker.progress['tasks']:
+            tracker.progress['tasks'][task_key] = {
+                'source_id': source_id,
+                'target_id': target_id,
+                'content_type': content_type
+            }
+    tracker._save()
 
     # Show current progress
     stats = tracker.get_stats(content_type)
     print(f"Progress: Swap {stats['swap']}/{stats['total']} ({stats['swap_pct']}%), " +
-          f"Enhance {stats['enhance']}/{stats['enhance_pct']}% ({stats['enhance_pct']}%)")
+          f"Enhance {stats['enhance']}/{stats['total']} ({stats['enhance_pct']}%), " +
+          f"Caption {stats['caption']}/{stats['total']} ({stats['caption_pct']}%)")
     print()
 
     resume = get_input("Resume from previous run? (y/n)", ['y', 'n'])
@@ -405,13 +516,13 @@ def process_model(model_name, content_type):
     upload_urls = {}
 
     for source_id, filename, filepath in sources:
-        s3_key = f'originals/{content_type}_source_{source_id}_{filename}'
+        s3_key = f'originals/sources/{filename}'
         print(f"Uploading source {source_id}: {filename}...")
         url = s3.upload_file(filepath, s3_key)
         upload_urls[f'source_{source_id}'] = url
 
     for target_id, filename, filepath in targets:
-        s3_key = f'originals/{content_type}_target_{target_id}_{filename}'
+        s3_key = f'originals/targets/{content_type}/{filename}'
         print(f"Uploading target {target_id}: {filename}...")
         url = s3.upload_file(filepath, s3_key)
         upload_urls[f'target_{target_id}'] = url
@@ -422,130 +533,208 @@ def process_model(model_name, content_type):
     print("\n--- STEP 2: Face Swapping ---")
     swap_count = 0
 
-    for source_id, source_filename, source_filepath in sources:
+    for source_id, target_id, source_filename, source_filepath, target_filename, target_filepath in task_pairs:
+        # Check if already completed
+        if tracker.is_completed(source_id, target_id, content_type, 'swap'):
+            print(f"[{swap_count + 1}/{len(task_pairs)}] Skipping s{source_id}-t{target_id} (already completed)")
+            swap_count += 1
+            continue
+
+        print(f"\n[{swap_count + 1}/{len(task_pairs)}] Processing: source {source_id} → target {target_id}")
         source_url = upload_urls[f'source_{source_id}']
+        target_url = upload_urls[f'target_{target_id}']
 
-        for target_id, target_filename, target_filepath in targets:
-            # Check if already completed
-            if tracker.is_completed(source_id, target_id, content_type, 'swap'):
-                print(f"[{swap_count + 1}/{len(sources) * len(targets)}] Skipping s{source_id}-t{target_id} (already completed)")
-                swap_count += 1
-                continue
+        try:
+            # Detect face
+            print("  • Detecting face...")
+            face = api.detect_face(target_url)
+            print(f"  ✓ Face detected at ({face['x']}, {face['y']})")
 
-            print(f"\n[{swap_count + 1}/{len(sources) * len(targets)}] Processing: source {source_id} → target {target_id}")
-            target_url = upload_urls[f'target_{target_id}']
+            # Start swap
+            print("  • Starting face swap...")
+            job_id = api.swap_face(source_url, target_url, face)
+            print(f"  ✓ Job created: {job_id}")
 
-            try:
-                # Detect face
-                print("  • Detecting face...")
-                face = api.detect_face(target_url)
-                print(f"  ✓ Face detected at ({face['x']}, {face['y']})")
+            # Wait for completion
+            print("  • Waiting for completion...")
+            result_url = api.wait_for_swap(job_id)
+            print(f"  ✓ Swap completed")
 
-                # Start swap
-                print("  • Starting face swap...")
-                job_id = api.swap_face(source_url, target_url, face)
-                print(f"  ✓ Job created: {job_id}")
+            # Download result
+            smart_name = get_smart_filename(model_name, source_id, target_id, content_type, 'swapped')
+            result_dir = get_results_path(model_name, content_type, source_id, 'swapped')
+            result_dir.mkdir(parents=True, exist_ok=True)
+            result_path = result_dir / smart_name
 
-                # Wait for completion
-                print("  • Waiting for completion...")
-                result_url = api.wait_for_swap(job_id)
-                print(f"  ✓ Swap completed")
+            download_image(result_url, str(result_path))
+            print(f"  ✓ Saved: {result_path}")
 
-                # Download result
-                smart_name = get_smart_filename(model_name, source_id, target_id, content_type, 'swapped')
-                result_dir = get_results_path(model_name, content_type, source_id, 'swapped')
-                result_dir.mkdir(parents=True, exist_ok=True)
-                result_path = result_dir / smart_name
+            # Resize to 1024x1024 for consistent LoRA training
+            print("  • Resizing to 1024x1024...")
+            resize_image(str(result_path), str(result_path), target_size=1024)
+            print(f"  ✓ Resized for training")
 
-                download_image(result_url, str(result_path))
-                print(f"  ✓ Saved: {result_path}")
+            # Upload swapped image to S3
+            s3_key = f'results/{content_type}/source_{source_id}/swapped/{smart_name}'
+            swapped_s3_url = s3.upload_file(str(result_path), s3_key)
+            print(f"  ✓ Uploaded to S3")
 
-                # Mark completed
-                tracker.mark_completed(source_id, target_id, content_type, 'swap', {
-                    'job_id': job_id,
-                    'result_url': result_url,
-                    'local_path': str(result_path)
-                })
+            # Mark completed
+            tracker.mark_completed(source_id, target_id, content_type, 'swap', {
+                'job_id': job_id,
+                'result_url': result_url,
+                'local_path': str(result_path),
+                's3_url': swapped_s3_url
+            })
 
-                swap_count += 1
+            swap_count += 1
 
-            except Exception as e:
-                print(f"  ✗ Failed: {e}")
-                continue
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            continue
 
-    print(f"\n✓ Face swap complete: {swap_count}/{len(sources) * len(targets)} successful")
+    print(f"\n✓ Face swap complete: {swap_count}/{len(task_pairs)} successful")
 
     # Step 3: Enhancement
     print("\n--- STEP 3: Enhancement ---")
     enhance_count = 0
 
-    for source_id, _, _ in sources:
-        for target_id, _, _ in targets:
-            # Check if swap completed and enhance not done
-            if not tracker.is_completed(source_id, target_id, content_type, 'swap'):
+    for source_id, target_id, source_filename, source_filepath, target_filename, target_filepath in task_pairs:
+        # Check if swap completed and enhance not done
+        if not tracker.is_completed(source_id, target_id, content_type, 'swap'):
+            continue
+
+        if tracker.is_completed(source_id, target_id, content_type, 'enhance'):
+            print(f"[{enhance_count + 1}] Skipping s{source_id}-t{target_id} (already enhanced)")
+            enhance_count += 1
+            continue
+
+        print(f"\n[{enhance_count + 1}] Enhancing: source {source_id} → target {target_id}")
+
+        try:
+            # Get swapped image path
+            smart_name = get_smart_filename(model_name, source_id, target_id, content_type, 'swapped')
+            swapped_path = get_results_path(model_name, content_type, source_id, 'swapped') / smart_name
+
+            if not swapped_path.exists():
+                print(f"  ✗ Swapped image not found: {swapped_path}")
                 continue
 
-            if tracker.is_completed(source_id, target_id, content_type, 'enhance'):
-                print(f"[{enhance_count + 1}] Skipping s{source_id}-t{target_id} (already enhanced)")
-                enhance_count += 1
+            # Convert to base64
+            print("  • Converting to base64...")
+            img_b64 = image_to_base64(str(swapped_path))
+
+            # Start enhancement
+            print("  • Starting enhancement...")
+            job_id = api.enhance_image(img_b64, upscale=2)
+            print(f"  ✓ Job created: {job_id}")
+
+            # Wait for completion
+            print("  • Waiting for completion...")
+            result_b64 = api.wait_for_enhance(job_id)
+            print(f"  ✓ Enhancement completed")
+
+            # Save result
+            enhanced_name = get_smart_filename(model_name, source_id, target_id, content_type, 'enhanced')
+            enhanced_dir = get_results_path(model_name, content_type, source_id, 'enhanced')
+            enhanced_dir.mkdir(parents=True, exist_ok=True)
+            enhanced_path = enhanced_dir / enhanced_name
+
+            base64_to_image(result_b64, str(enhanced_path))
+            print(f"  ✓ Saved: {enhanced_path}")
+
+            # Upload to S3
+            s3_key = f'results/{content_type}/source_{source_id}/enhanced/{enhanced_name}'
+            s3_url = s3.upload_file(str(enhanced_path), s3_key)
+            print(f"  ✓ Uploaded to S3")
+
+            # Mark completed
+            tracker.mark_completed(source_id, target_id, content_type, 'enhance', {
+                'job_id': job_id,
+                'local_path': str(enhanced_path),
+                's3_url': s3_url
+            })
+
+            enhance_count += 1
+
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            continue
+
+    print(f"\n✓ Enhancement complete: {enhance_count} successful")
+
+    # Step 4: Caption Generation
+    print("\n--- STEP 4: Generating Captions with Grok Vision ---")
+
+    # Check for Grok API key
+    grok_api_key = os.getenv('GROK_API_KEY')
+    if not grok_api_key:
+        print("⚠ GROK_API_KEY not found in .env - Skipping caption generation")
+        print("  Add GROK_API_KEY to .env to enable captions")
+    else:
+        caption_count = 0
+        generator = CaptionGenerator(grok_api_key)
+
+        for source_id, target_id, source_filename, source_filepath, target_filename, target_filepath in task_pairs:
+            # Check if enhanced exists and caption not done
+            if not tracker.is_completed(source_id, target_id, content_type, 'enhance'):
                 continue
 
-            print(f"\n[{enhance_count + 1}] Enhancing: source {source_id} → target {target_id}")
+            if tracker.is_completed(source_id, target_id, content_type, 'caption'):
+                print(f"[{caption_count + 1}] Skipping s{source_id}-t{target_id} (caption already exists)")
+                caption_count += 1
+                continue
+
+            print(f"\n[{caption_count + 1}] Generating caption: source {source_id} → target {target_id}")
 
             try:
-                # Get swapped image path
-                smart_name = get_smart_filename(model_name, source_id, target_id, content_type, 'swapped')
-                swapped_path = get_results_path(model_name, content_type, source_id, 'swapped') / smart_name
+                # Get enhanced image path
+                enhanced_name = get_smart_filename(model_name, source_id, target_id, content_type, 'enhanced')
+                enhanced_path = get_results_path(model_name, content_type, source_id, 'enhanced') / enhanced_name
 
-                if not swapped_path.exists():
-                    print(f"  ✗ Swapped image not found: {swapped_path}")
+                if not enhanced_path.exists():
+                    print(f"  ✗ Enhanced image not found: {enhanced_path}")
                     continue
 
-                # Convert to base64
-                print("  • Converting to base64...")
-                img_b64 = image_to_base64(str(swapped_path))
+                # Generate caption
+                print("  • Analyzing image with Grok Vision...")
+                caption = generator.generate_caption(str(enhanced_path), model_name)
 
-                # Start enhancement
-                print("  • Starting enhancement...")
-                job_id = api.enhance_image(img_b64, upscale=2)
-                print(f"  ✓ Job created: {job_id}")
+                if not caption:
+                    print(f"  ✗ Failed to generate caption")
+                    continue
 
-                # Wait for completion
-                print("  • Waiting for completion...")
-                result_b64 = api.wait_for_enhance(job_id)
-                print(f"  ✓ Enhancement completed")
+                print(f"  ✓ Caption generated ({len(caption)} chars)")
 
-                # Save result
-                enhanced_name = get_smart_filename(model_name, source_id, target_id, content_type, 'enhanced')
-                enhanced_dir = get_results_path(model_name, content_type, source_id, 'enhanced')
-                enhanced_dir.mkdir(parents=True, exist_ok=True)
-                enhanced_path = enhanced_dir / enhanced_name
+                # Save caption locally and to S3
+                print("  • Saving caption...")
+                caption_s3_url = generator.save_caption(str(enhanced_path), caption, s3)
 
-                base64_to_image(result_b64, str(enhanced_path))
-                print(f"  ✓ Saved: {enhanced_path}")
-
-                # Upload to S3
-                s3_key = f'results/{content_type}/source_{source_id}/enhanced/{enhanced_name}'
-                s3_url = s3.upload_file(str(enhanced_path), s3_key)
-                print(f"  ✓ Uploaded to S3")
+                txt_path = enhanced_path.with_suffix('.txt')
+                print(f"  ✓ Saved: {txt_path}")
+                if caption_s3_url:
+                    print(f"  ✓ Uploaded to S3: {caption_s3_url}")
+                else:
+                    print(f"  ⚠ S3 upload failed (check logs above)")
 
                 # Mark completed
-                tracker.mark_completed(source_id, target_id, content_type, 'enhance', {
-                    'job_id': job_id,
-                    'local_path': str(enhanced_path),
-                    's3_url': s3_url
+                tracker.mark_completed(source_id, target_id, content_type, 'caption', {
+                    'caption_preview': caption[:100] + '...' if len(caption) > 100 else caption,
+                    'local_path': str(txt_path),
+                    's3_url': caption_s3_url,
+                    'caption_length': len(caption)
                 })
 
-                enhance_count += 1
+                caption_count += 1
 
             except Exception as e:
                 print(f"  ✗ Failed: {e}")
                 continue
 
-    print(f"\n✓ Enhancement complete: {enhance_count} successful")
+        print(f"\n✓ Caption generation complete: {caption_count} successful")
 
     # Update config
-    update_processing_history(model_name, content_type, len(targets) * len(sources))
+    update_processing_history(model_name, content_type, len(task_pairs))
 
     print("\n" + "=" * 60)
     print("  Processing Complete!")
@@ -567,11 +756,13 @@ def view_progress(model_name):
     print("NSFW:")
     print(f"  Swap: {nsfw_stats['swap']}/{nsfw_stats['total']} ({nsfw_stats['swap_pct']}%)")
     print(f"  Enhance: {nsfw_stats['enhance']}/{nsfw_stats['total']} ({nsfw_stats['enhance_pct']}%)")
+    print(f"  Caption: {nsfw_stats['caption']}/{nsfw_stats['total']} ({nsfw_stats['caption_pct']}%)")
     print()
 
     print("SFW:")
     print(f"  Swap: {sfw_stats['swap']}/{sfw_stats['total']} ({sfw_stats['swap_pct']}%)")
     print(f"  Enhance: {sfw_stats['enhance']}/{sfw_stats['total']} ({sfw_stats['enhance_pct']}%)")
+    print(f"  Caption: {sfw_stats['caption']}/{sfw_stats['total']} ({sfw_stats['caption_pct']}%)")
 
     input("\nPress Enter to continue...")
 
@@ -631,19 +822,15 @@ def add_sources(model_name):
                 print(f"  ✗ Skipping (not jpg/png): {source_path.name}")
                 continue
 
-            # Copy to source directory with original name
-            dest_path = source_dir / source_path.name
-
-            # Handle duplicates
-            counter = 1
-            while dest_path.exists():
-                stem = source_path.stem
-                dest_path = source_dir / f"{stem}_{counter}{source_path.suffix}"
-                counter += 1
+            # Find next available number and use smart naming
+            existing = list(source_dir.glob('*.jpg')) + list(source_dir.glob('*.jpeg')) + list(source_dir.glob('*.png'))
+            next_num = len(existing) + 1
+            dest_filename = f"{model_name}-s{next_num}-original.jpg"
+            dest_path = source_dir / dest_filename
 
             try:
                 shutil.copy2(source_path, dest_path)
-                print(f"  ✓ {source_path.name} → {dest_path.name}")
+                print(f"  ✓ {source_path.name} → {dest_filename}")
                 uploaded_count += 1
             except Exception as e:
                 print(f"  ✗ Failed: {source_path.name} - {e}")
@@ -758,10 +945,10 @@ def add_targets_direct(model_name, content_type):
                 print(f"  ✗ Skipping (not jpg/png): {source_path.name}")
                 continue
 
-            # Find next available number
+            # Find next available number and use smart naming
             existing = list(targets_dir.glob('*.jpg')) + list(targets_dir.glob('*.jpeg')) + list(targets_dir.glob('*.png'))
             next_num = len(existing) + 1
-            dest_filename = f"{next_num:03d}{source_path.suffix}"
+            dest_filename = f"{model_name}-t{next_num}-{content_type}-original.jpg"
             dest_path = targets_dir / dest_filename
 
             try:

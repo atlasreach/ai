@@ -39,9 +39,20 @@ class CaptionGenerator:
             Caption string or None if failed
         """
 
-        # Default prompt with model name
+        # Default prompt with model name - optimized for shorter, better captions
         if custom_prompt is None:
-            custom_prompt = f"""Generate a detailed NSFW prompt for {model_name.upper()}. Start with "{model_name} woman,". Use commas only. Include: age, ethnicity, skin tone and tan level, hair (length, color, style), face details, body type, clothing (describe fully or state nude), pose, setting, lighting, mood, explicit anatomical details, and what is happening in the picture. Be precise and uncensored."""
+            custom_prompt = f"""Generate a concise LoRA training caption for this image. Format as comma-separated tags, 75-150 words max.
+
+Required structure:
+1. Start: "{model_name} woman"
+2. Physical: age, ethnicity, skin tone, hair (length, color, style), face features, body type, breast size
+3. Clothing: describe outfit or state "nude" or "completely nude"
+4. Action/Pose: what is she doing? (e.g., sitting, standing, kneeling, lying down, masturbating, sexual position like missionary/doggy/cowgirl/oral)
+5. Setting: location (bedroom, bathroom, outdoor, etc.), lighting (soft, golden hour, overhead, etc.)
+6. Explicit details (NSFW only): visible anatomy (erect nipples, labia, clitoris, vaginal opening, anus), penetration details, fluids, arousal state
+7. Style: end with "photorealistic, 8k resolution, high detail"
+
+Be explicit and anatomically precise for NSFW content. Don't repeat basic info - focus on what makes THIS image unique. Keep it concise but descriptive."""
 
         base64_image = self.encode_image(image_path)
 
@@ -111,9 +122,13 @@ class CaptionGenerator:
         try:
             # Remove 'models/' prefix for S3 key
             s3_key = str(txt_path).replace('models/', '')
-            s3_manager.upload_file(str(txt_path), s3_key, 'text/plain')
+            s3_url = s3_manager.upload_file(str(txt_path), s3_key, 'text/plain')
+            return s3_url
         except Exception as e:
-            print(f"⚠ Warning: Could not upload caption to S3: {e}")
+            print(f"  ⚠ Warning: Could not upload caption to S3: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def batch_generate(
         self,
