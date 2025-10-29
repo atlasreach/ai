@@ -31,14 +31,14 @@ fi
 
 # Step 3: Verify dataset exists
 echo -e "\n[3/5] Verifying dataset..."
-if [ ! -d "/workspace/lora_training" ]; then
+if [ ! -d "/workspace/lora_training/10_sar woman" ]; then
     echo "  ✗ Dataset not found!"
     echo "  Run: bash /workspace/ai/runpod_prepare_sar_from_s3.sh"
     exit 1
 fi
 
-IMAGE_COUNT=$(ls -1 /workspace/lora_training/images/*.jpg 2>/dev/null | wc -l)
-CAPTION_COUNT=$(ls -1 /workspace/lora_training/images/*.txt 2>/dev/null | wc -l)
+IMAGE_COUNT=$(ls -1 "/workspace/lora_training/10_sar woman"/*.jpg 2>/dev/null | wc -l)
+CAPTION_COUNT=$(ls -1 "/workspace/lora_training/10_sar woman"/*.txt 2>/dev/null | wc -l)
 
 echo "  • Found $IMAGE_COUNT images"
 echo "  • Found $CAPTION_COUNT captions"
