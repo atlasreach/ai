@@ -103,7 +103,7 @@ cat > /workspace/train_sar.sh << 'EOF'
 #!/bin/bash
 set -e
 
-cd /workspace/kohya_ss
+cd /workspace/kohya_ss/sd-scripts
 
 echo "=========================================="
 echo "  Starting LoRA Training: SAR"
