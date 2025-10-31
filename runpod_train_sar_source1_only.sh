@@ -69,14 +69,11 @@ echo ""
 echo "Step 2: Installing SimpleTuner (Flux-compatible)..."
 cd /workspace
 
-if [ ! -d "SimpleTuner" ]; then
-    git clone https://github.com/bghira/SimpleTuner.git
-    cd SimpleTuner
-    pip install -q -e .  # Install in editable mode from source
+if ! python -c "import simpletuner" 2>/dev/null; then
+    pip install simpletuner[cuda]
     echo "✓ SimpleTuner installed"
-    cd /workspace
 else
-    echo "✓ SimpleTuner already exists"
+    echo "✓ SimpleTuner already installed"
 fi
 
 # Create training config
@@ -116,15 +113,13 @@ cat > /workspace/train_sar_flux.sh << 'TRAINSCRIPT'
 #!/bin/bash
 set -e
 
-cd /workspace/SimpleTuner
-
 echo "=========================================="
 echo "  Starting Flux LoRA Training"
 echo "  Images: $(ls /workspace/lora_training/10_sar/*.jpg | wc -l)"
 echo "  Trigger: 'sar'"
 echo "=========================================="
 
-python train.py \
+python -m simpletuner.train \
   --pretrained_model_name_or_path="black-forest-labs/FLUX.1-dev" \
   --instance_data_dir="/workspace/lora_training/10_sar" \
   --output_dir="/workspace/sar_lora_output" \

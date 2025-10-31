@@ -1,5 +1,87 @@
 # AI Model Studio - Project Overview
 
+## 🚨 CURRENT STATUS (Oct 29, 2025 - 4:45 PM EST)
+
+**Model**: SAR (Source 1 only - 7 images)
+**Phase**: Phase 2 - LoRA Training Setup
+**Location**: RunPod terminal at `/workspace`
+
+### ✅ Completed Today:
+1. ✅ Generated captions for all SAR enhanced images using BLIP
+2. ✅ Uploaded 7 enhanced images + captions to S3: `s3://destinty-workflow-1761724503/results/nsfw/source_1/enhanced/`
+3. ✅ Created `runpod_train_sar_source1_only.sh` script for automated training
+4. ✅ Fixed SimpleTuner installation bug (was using `requirements.txt`, now uses `pip install simpletuner[cuda]`)
+5. ✅ Committed fix to GitHub (commit: `16ef9dd`)
+6. ✅ Pulled updated script to RunPod
+7. ✅ Downloaded training data from S3 to `/workspace/lora_training/10_sar/`
+
+### 🔄 IN PROGRESS RIGHT NOW:
+**SimpleTuner is installing** (process 6823, running 15+ seconds, using 10.6% CPU)
+- Command: `pip install -q simpletuner[cuda]`
+- Expected time: 10-15 minutes
+- Status: ✅ Working correctly (verified with `ps aux | grep pip`)
+
+### ⏭️ NEXT STEPS (When you come back online):
+
+1. **Check if SimpleTuner finished installing:**
+   ```bash
+   # In RunPod terminal, check if still running:
+   ps aux | grep pip
+
+   # If nothing shows, it's done! You should see:
+   # "✓ SimpleTuner installed"
+   # "Step 3: Creating training config..."
+   ```
+
+2. **If installation completed, training should auto-start:**
+   ```bash
+   # The script will create:
+   # - /workspace/train_config.json
+   # - /workspace/train_sar_flux.sh
+   # - Then run: bash /workspace/train_sar_flux.sh
+   ```
+
+3. **Monitor training progress:**
+   ```bash
+   # Training takes ~30-60 minutes
+   # Watch for: "Training Complete!"
+   # Output will be in: /workspace/sar_lora_output/
+   ```
+
+4. **If installation failed or stuck:**
+   ```bash
+   # Kill and restart:
+   pkill -9 pip
+   cd /workspace
+   pip install simpletuner[cuda]  # Without -q to see progress
+
+   # Then run:
+   bash /workspace/ai/runpod_train_sar_source1_only.sh
+   ```
+
+### 🐛 Known Issues & Fixes:
+- ❌ **SimpleTuner git clone + requirements.txt** → ✅ Fixed: Now uses `pip install simpletuner[cuda]`
+- ⏳ **Installation seems frozen** → Normal! Takes 10-15 min, use `ps aux | grep pip` to verify
+
+### 📁 Important File Locations:
+
+**In RunPod (`/workspace`):**
+- Training images: `/workspace/lora_training/10_sar/` (7 images + 7 captions)
+- Setup script: `/workspace/ai/runpod_train_sar_source1_only.sh`
+- Training script: `/workspace/train_sar_flux.sh` (created by setup)
+- Output: `/workspace/sar_lora_output/` (will contain trained LoRA)
+
+**In GitHub Codespaces (`/workspaces/ai`):**
+- Main script: `runpod_train_sar_source1_only.sh`
+- Master workflow: `master_v2.py`
+- Caption scripts: `generate_captions.py`, `caption_one_folder.py`
+
+**In S3 (`destinty-workflow-1761724503`):**
+- Images: `results/nsfw/source_1/enhanced/sar-s1-t*.jpg`
+- Captions: `results/nsfw/source_1/enhanced/sar-s1-t*.txt`
+
+---
+
 ## 🎯 PROJECT VISION
 
 Build a **professional SaaS platform** for creating personalized AI models through face swapping, enhancement, and LoRA training. Think "MaxStudio meets Stable Diffusion" - a complete pipeline from photos to trained models.
