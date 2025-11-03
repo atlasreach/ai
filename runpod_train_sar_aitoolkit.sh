@@ -9,9 +9,15 @@ echo "  SAR LoRA Training (ai-toolkit)"
 echo "  Flux.1-dev | 7 images"
 echo "=========================================="
 
-# SET YOUR AWS CREDENTIALS BEFORE RUNNING:
-# export AWS_ACCESS_KEY_ID='your-key-here'
-# export AWS_SECRET_ACCESS_KEY='your-secret-here'
+# Try to load credentials from file first
+if [ -f "/workspace/.runpod_env" ]; then
+    echo "Loading credentials from /workspace/.runpod_env..."
+    source /workspace/.runpod_env
+elif [ -f "$HOME/.runpod_env" ]; then
+    echo "Loading credentials from ~/.runpod_env..."
+    source "$HOME/.runpod_env"
+fi
+
 export AWS_REGION='us-east-2'
 export BUCKET_NAME='destinty-workflow-1761724503'
 
@@ -19,9 +25,19 @@ export BUCKET_NAME='destinty-workflow-1761724503'
 if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
     echo "✗ AWS credentials not set!"
     echo ""
-    echo "Run these commands first:"
-    echo "  export AWS_ACCESS_KEY_ID='your-key'"
-    echo "  export AWS_SECRET_ACCESS_KEY='your-secret'"
+    echo "Get credentials from your local .env file, then:"
+    echo ""
+    echo "Option 1: Set for this session:"
+    echo "  export AWS_ACCESS_KEY_ID='your-key-from-env'"
+    echo "  export AWS_SECRET_ACCESS_KEY='your-secret-from-env'"
+    echo ""
+    echo "Option 2: Create credentials file (recommended - persists):"
+    echo "  cat > /workspace/.runpod_env << 'EOF'"
+    echo "  export AWS_ACCESS_KEY_ID='your-key-from-env'"
+    echo "  export AWS_SECRET_ACCESS_KEY='your-secret-from-env'"
+    echo "  EOF"
+    echo ""
+    echo "Then run this script again: bash runpod_train_sar_aitoolkit.sh"
     echo ""
     exit 1
 fi

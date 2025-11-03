@@ -17,23 +17,38 @@
 
 ### Step 2: Run These Commands in Web Terminal
 
-**Copy-paste this entire block:**
-
+**Option 1: Quick Setup (one-time credentials)**
 ```bash
-# Clone repo
 cd /workspace
 git clone https://github.com/atlasreach/ai.git
 cd ai
 
-# Set AWS credentials (GET FROM YOUR .env FILE!)
-export AWS_ACCESS_KEY_ID='YOUR_KEY_HERE'
-export AWS_SECRET_ACCESS_KEY='YOUR_SECRET_HERE'
+# Get these from /workspaces/ai/.env file (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+export AWS_ACCESS_KEY_ID='paste-from-env-file'
+export AWS_SECRET_ACCESS_KEY='paste-from-env-file'
 
-# Run training
 bash runpod_train_sar_aitoolkit.sh
 ```
 
-**IMPORTANT:** Replace `YOUR_KEY_HERE` with your actual AWS credentials from `.env`
+**Option 2: Persistent Setup (saves credentials - recommended)**
+```bash
+cd /workspace
+git clone https://github.com/atlasreach/ai.git
+
+# Create credentials file (get values from /workspaces/ai/.env)
+cat > /workspace/.runpod_env << 'EOF'
+export AWS_ACCESS_KEY_ID='paste-from-env-file'
+export AWS_SECRET_ACCESS_KEY='paste-from-env-file'
+EOF
+
+# Now run training (will auto-load credentials!)
+cd ai
+bash runpod_train_sar_aitoolkit.sh
+```
+
+**✨ NEW:** The script now auto-loads credentials from `/workspace/.runpod_env` if it exists!
+
+**Where to get credentials:** Check your local `/workspaces/ai/.env` file for `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
 
 ---
 
@@ -89,13 +104,23 @@ ls -lh /workspace/ai-toolkit/output/sar_flux_lora/
 ## 🐛 Troubleshooting
 
 ### "AWS credentials not set"
-```bash
-# Make sure you ran:
-export AWS_ACCESS_KEY_ID='your-actual-key'
-export AWS_SECRET_ACCESS_KEY='your-actual-secret'
 
-# Test with:
-aws s3 ls s3://destinty-workflow-1761724503/
+The script will show you helpful error messages. Get your credentials from `/workspaces/ai/.env` and either:
+
+**Quick fix:**
+```bash
+export AWS_ACCESS_KEY_ID='your-key-from-env'
+export AWS_SECRET_ACCESS_KEY='your-secret-from-env'
+bash runpod_train_sar_aitoolkit.sh
+```
+
+**Or create credentials file (persists across sessions):**
+```bash
+cat > /workspace/.runpod_env << 'EOF'
+export AWS_ACCESS_KEY_ID='your-key-from-env'
+export AWS_SECRET_ACCESS_KEY='your-secret-from-env'
+EOF
+bash runpod_train_sar_aitoolkit.sh
 ```
 
 ### "No images downloaded"
