@@ -65,7 +65,7 @@ if [ ! -d "ai-toolkit" ]; then
 
     # Install specific PyTorch version (no conflicts!)
     echo "  • Installing PyTorch 2.6.0 + CUDA 12.6..."
-    pip3 install --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu126
+    pip3 install --no-cache-dir torch==2.6.0 torchvision==0.21.0 torchaudio --index-url https://download.pytorch.org/whl/cu126
 
     # Install ai-toolkit requirements
     echo "  • Installing ai-toolkit dependencies..."
@@ -77,6 +77,12 @@ else
     echo "✓ ai-toolkit already installed"
     cd /workspace/ai-toolkit
     source venv/bin/activate
+
+    # Check if torchaudio is installed (common missing dependency)
+    if ! python -c "import torchaudio" 2>/dev/null; then
+        echo "  • Installing missing torchaudio..."
+        pip3 install --no-cache-dir torchaudio --index-url https://download.pytorch.org/whl/cu126
+    fi
 fi
 
 #############################################

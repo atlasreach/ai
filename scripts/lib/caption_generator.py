@@ -41,11 +41,11 @@ class CaptionGenerator:
 
         # Default prompt with model name - optimized for shorter, better captions
         if custom_prompt is None:
-            custom_prompt = f"""Generate a concise LoRA training caption for this image. Format as comma-separated tags, 75-150 words max.
+            custom_prompt = f"""Generate a concise LoRA training caption for this image. Format as comma-separated tags, 75-150 words max.ust 
 
 Required structure:
 1. Start: "{model_name} woman"
-2. Physical: age, ethnicity, skin tone, hair (length, color, style), face features, body type, breast size
+2. Physical: age, skin tone, hair (length, color, style), face features, body type, breast size
 3. Clothing: describe outfit or state "nude" or "completely nude"
 4. Action/Pose: what is she doing? (e.g., sitting, standing, kneeling, lying down, masturbating, sexual position like missionary/doggy/cowgirl/oral)
 5. Setting: location (bedroom, bathroom, outdoor, etc.), lighting (soft, golden hour, overhead, etc.)
