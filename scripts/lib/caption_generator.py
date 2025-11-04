@@ -1,65 +1,46 @@
-"""Caption generation with Grok Vision for LoRA training"""
-
+"""Caption generation with Grok Vision for LoRA training - Optimized for Sara"""
 import os
 import base64
 import requests
 import json
 from pathlib import Path
-from typing import Optional, Dict, List
-
+from typing import Optional, Dict, List, Tuple
+import re
 
 class CaptionGenerator:
-    """Generate captions for images using Grok Vision API"""
-
+    """Generate concise LoRA captions using Grok Vision API"""
+    
     def __init__(self, grok_api_key: str):
         self.api_key = grok_api_key
         self.api_url = "https://api.x.ai/v1/chat/completions"
-        self.model = "grok-4"  # Best model for detailed captions
+        self.model = "grok-4"
 
     def encode_image(self, image_path: str) -> str:
-        """Encode image to base64"""
         with open(image_path, 'rb') as f:
             return base64.b64encode(f.read()).decode('utf-8')
 
-    def generate_caption(
-        self,
-        image_path: str,
-        model_name: str,
-        custom_prompt: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Generate caption for image
-
-        Args:
-            image_path: Path to image file
-            model_name: Model name (e.g., "anna", "andie")
-            custom_prompt: Optional custom prompt override
-
-        Returns:
-            Caption string or None if failed
-        """
-
-        # Default prompt with model name - optimized for shorter, better captions
-        if custom_prompt is None:
-            custom_prompt = f"""Generate a concise LoRA training caption for this image. Format as comma-separated tags, 75-150 words max.ust 
-
-Required structure:
-1. Start: "{model_name} woman"
-2. Physical: age, skin tone, hair (length, color, style), face features, body type, breast size
-3. Clothing: describe outfit or state "nude" or "completely nude"
-4. Action/Pose: what is she doing? (e.g., sitting, standing, kneeling, lying down, masturbating, sexual position like missionary/doggy/cowgirl/oral)
-5. Setting: location (bedroom, bathroom, outdoor, etc.), lighting (soft, golden hour, overhead, etc.)
-6. Explicit details (NSFW only): visible anatomy (erect nipples, labia, clitoris, vaginal opening, anus), penetration details, fluids, arousal state
-7. Style: end with "photorealistic, 8k resolution, high detail"
-
-Be explicit and anatomically precise for NSFW content. Don't repeat basic info - focus on what makes THIS image unique. Keep it concise but descriptive."""
-
+    def generate_caption(self, image_path: str, idx: int) -> Optional[str]:
         base64_image = self.encode_image(image_path)
-
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
+
+        # OPTIMIZED PROMPT: Short, consistent, token-efficient
+        prompt = f"""Analyze this image and generate a LoRA training caption.
+Rules:
+- Start with: Sara
+- Use comma-separated tags only
+- Max 75 tokens (~150 chars)
+- Include: skin, hair, brows, clothing/nude, pose, setting
+- End with: sfw or nsfw
+- Be explicit only if visible
+- No sentences, no fluff, no repetition
+
+Example:
+Sara, olive skin, long dark hair, thick brows, black lace lingerie, kneeling, luxury room, nsfw
+
+Now describe this image:"""
 
         payload = {
             "model": self.model,
@@ -67,133 +48,91 @@ Be explicit and anatomically precise for NSFW content. Don't repeat basic info -
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": custom_prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                     ]
                 }
             ],
-            "temperature": 0.7,
-            "max_tokens": 600
+            "temperature": 0.5,
+            "max_tokens": 150
         }
 
         try:
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=60
-            )
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
-
-            data = response.json()
-
-            if 'choices' in data and len(data['choices']) > 0:
-                return data['choices'][0]['message']['content']
-
-            return None
-
+            content = response.json()["choices"][0]["message"]["content"].strip()
+            
+            # Clean up
+            caption = re.sub(r'\s+', ' ', content)
+            caption = re.sub(r'^Sara\s*,?\s*', 'Sara, ', caption)  # enforce trigger
+            if not caption.lower().endswith(('sfw', 'nsfw')):
+                caption += ', nsfw' if 'nude' in caption.lower() or 'pussy' in caption.lower() else ', sfw'
+            return caption
         except Exception as e:
-            print(f"Error generating caption: {e}")
+            print(f"Error: {e}")
             return None
 
-    def save_caption(self, image_path: str, caption: str, s3_manager):
-        """
-        Save caption as .txt file next to image and upload to S3
+    def save_renamed(self, image_path: str, caption: str, output_dir: str, idx: int):
+        """Save image and caption as sara_1.png, sara_1.txt etc."""
+        os.makedirs(output_dir, exist_ok=True)
+        
+        new_name = f"sara_{idx}"
+        img_ext = Path(image_path).suffix
+        new_img_path = Path(output_dir) / f"{new_name}{img_ext}"
+        new_txt_path = Path(output_dir) / f"{new_name}.txt"
 
-        Args:
-            image_path: Path to image
-            caption: Caption text
-            s3_manager: S3Manager instance (required)
-        """
-        # Save locally (required for LoRA training)
-        txt_path = Path(image_path).with_suffix('.txt')
-        with open(txt_path, 'w', encoding='utf-8') as f:
+        # Copy image
+        import shutil
+        shutil.copy2(image_path, new_img_path)
+        
+        # Save caption
+        with open(new_txt_path, 'w', encoding='utf-8') as f:
             f.write(caption)
 
-        # Always upload to S3 for backup/reference
-        try:
-            # Remove 'models/{model_name}/' prefix for S3 key
-            # e.g., 'models/sar/results/nsfw/...' → 'results/nsfw/...'
-            txt_path_str = str(txt_path).replace('\\', '/')
-            parts = txt_path_str.split('/')
-            if 'models' in parts and 'results' in parts:
-                results_idx = parts.index('results')
-                s3_key = '/'.join(parts[results_idx:])
-            else:
-                # Fallback: just remove 'models/' prefix
-                s3_key = txt_path_str.replace('models/', '')
-
-            s3_url = s3_manager.upload_file(str(txt_path), s3_key, 'text/plain')
-            return s3_url
-        except Exception as e:
-            print(f"  ⚠ Warning: Could not upload caption to S3: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+        print(f"→ Saved: {new_img_path.name}, {new_txt_path.name}")
+        return str(new_img_path), str(new_txt_path)
 
     def batch_generate(
         self,
         image_paths: List[str],
-        model_name: str,
-        s3_manager,
+        output_dir: str,
+        s3_manager = None,
         progress_callback = None
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Tuple[str, str]]:
         """
-        Generate captions for multiple images
-
-        Args:
-            image_paths: List of image paths
-            model_name: Model name
-            s3_manager: S3Manager instance (required - always uploads to S3)
-            progress_callback: Optional callback(current, total, image_path, caption)
-
-        Returns:
-            Dict mapping image_path -> caption
+        Process all images → sara_1.png/txt, sara_2.png/txt...
+        Returns: {original_path: (new_img_path, new_txt_path)}
         """
+        os.makedirs(output_dir, exist_ok=True)
         results = {}
 
-        for i, image_path in enumerate(image_paths, 1):
-            print(f"\n[{i}/{len(image_paths)}] Processing: {Path(image_path).name}")
-
-            caption = self.generate_caption(image_path, model_name)
-
+        for i, img_path in enumerate(sorted(image_paths), 1):
+            print(f"\n[{i}/{len(image_paths)}] Processing: {Path(img_path).name}")
+            caption = self.generate_caption(img_path, i)
+            
             if caption:
-                results[image_path] = caption
-                print(f"✓ Caption generated ({len(caption)} chars)")
+                new_img, new_txt = self.save_renamed(img_path, caption, output_dir, i)
+                results[img_path] = (new_img, new_txt)
 
-                # Always save locally + upload to S3
-                self.save_caption(image_path, caption, s3_manager)
-                print(f"✓ Saved locally + uploaded to S3")
+                # Upload to S3 (optional)
+                if s3_manager:
+                    try:
+                        s3_manager.upload_file(new_img, f"lora/sara/{Path(new_img).name}")
+                        s3_manager.upload_file(new_txt, f"lora/sara/{Path(new_txt).name}")
+                    except Exception as e:
+                        print(f"S3 upload failed: {e}")
 
                 if progress_callback:
-                    progress_callback(i, len(image_paths), image_path, caption)
+                    progress_callback(i, len(image_paths), img_path, caption, new_img, new_txt)
             else:
-                print(f"✗ Failed to generate caption")
+                print("✗ Failed")
 
         return results
 
 
-def find_similar_outfits(image_paths: List[str], similarity_threshold: float = 0.85):
-    """
-    Group images by clothing similarity using CLIP
-
-    NOTE: Requires CLIP installed: pip install clip-interrogator
-
-    Args:
-        image_paths: List of image paths
-        similarity_threshold: Similarity score threshold (0-1)
-
-    Returns:
-        Dict of outfit groups: {outfit_id: [image_paths]}
-    """
+# ——— CLIP OUTFIT GROUPING (Optional) ———
+def group_by_outfit(image_paths: List[str], threshold: float = 0.85) -> Dict[str, List[str]]:
+    """Group images by visual outfit similarity using CLIP"""
     try:
         import torch
         from PIL import Image
@@ -202,19 +141,38 @@ def find_similar_outfits(image_paths: List[str], similarity_threshold: float = 0
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model, preprocess = clip.load("ViT-B/32", device=device)
 
-        # Get image embeddings
         embeddings = []
-        for img_path in image_paths:
-            image = preprocess(Image.open(img_path)).unsqueeze(0).to(device)
+        for path in image_paths:
+            img = preprocess(Image.open(path).convert("RGB")).unsqueeze(0).to(device)
             with torch.no_grad():
-                embedding = model.encode_image(image)
-                embeddings.append(embedding)
+                emb = model.encode_image(img).cpu()
+            embeddings.append(emb / emb.norm(dim=-1, keepdim=True))
 
-        # Compute similarity matrix and cluster
-        # TODO: Implement clustering algorithm
-        # For now, return placeholder
-        return {"outfit_1": image_paths}
+        embeddings = torch.cat(embeddings)
+        sim_matrix = embeddings @ embeddings.T
+
+        visited = set()
+        groups = {}
+        group_id = 0
+
+        for i in range(len(image_paths)):
+            if i in visited:
+                continue
+            group = [image_paths[i]]
+            visited.add(i)
+            for j in range(i + 1, len(image_paths)):
+                if sim_matrix[i][j] > threshold and j not in visited:
+                    group.append(image_paths[j])
+                    visited.add(j)
+            if len(group) > 1 or True:  # keep singles too
+                groups[f"outfit_{group_id}"] = group
+                group_id += 1
+
+        return groups
 
     except ImportError:
-        print("⚠ CLIP not installed. Install with: pip install clip-interrogator")
+        print("CLIP not available. Run: pip install torch torchvision clip-interrogator")
+        return {f"outfit_0": image_paths}
+    except Exception as e:
+        print(f"CLIP error: {e}")
         return {}
