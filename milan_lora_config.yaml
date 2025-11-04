@@ -1,0 +1,70 @@
+job: extension
+config:
+  name: milan_lora_v1
+  process:
+    - type: sd_trainer
+      training_folder: /workspace/output
+
+      device: cuda:0
+
+      # Model settings - same as Sara 2.0
+      network:
+        type: lora
+        linear: 16
+        linear_alpha: 16
+
+      # Save settings
+      save:
+        dtype: float16
+        save_every: 250
+        max_step_saves_to_keep: 10
+
+      # Dataset configuration
+      datasets:
+        - folder_path: /workspace/training_dataset
+          caption_ext: txt
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [1024, 1024]
+
+      # Training parameters - PROVEN TO WORK FOR SARA 2.0
+      train:
+        batch_size: 1
+        steps: 1500
+        gradient_accumulation_steps: 1
+        train_unet: true
+        train_text_encoder: false
+
+        learning_rate: 1e-4
+        lr_scheduler: constant
+
+        optimizer: adamw8bit
+        gradient_checkpointing: true
+        noise_scheduler: flowmatch
+
+      # Base model (Flux.1-dev)
+      model:
+        name_or_path: black-forest-labs/FLUX.1-dev
+        is_flux: true
+        quantize: true
+
+      # Sample images during training
+      sample:
+        sampler: flowmatch
+        sample_every: 250
+        width: 1024
+        height: 1024
+        prompts:
+          - "Milan, woman, portrait, professional photo"
+          - "Milan, woman, bikini, beach, full body"
+          - "Milan, woman, nude, bedroom, soft lighting"
+        neg: "blurry, low quality"
+        seed: 42
+        guidance_scale: 4
+        sample_steps: 20
+
+meta:
+  name: milan_lora_v1
+  version: 1.0
+  description: Milan LoRA trained on 54 high-quality images
