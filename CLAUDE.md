@@ -1,67 +1,66 @@
 # AI Model Studio - Project Overview
 
-## 🚨 CURRENT STATUS (Oct 29, 2025 - 4:45 PM EST)
+## 🚨 CURRENT STATUS (Nov 4, 2025)
 
-**Model**: SAR (Source 1 only - 7 images)
-**Phase**: Phase 2 - LoRA Training Setup
-**Location**: RunPod terminal at `/workspace`
+**Model**: SARA 2.0 (24 training images with captions)
+**Phase**: Phase 2 COMPLETE - LoRA Training & Video Generation
+**Status**: ✅ PRODUCTION READY
 
-### ✅ Completed Today:
-1. ✅ Generated captions for all SAR enhanced images using BLIP
-2. ✅ Uploaded 7 enhanced images + captions to S3: `s3://destinty-workflow-1761724503/results/nsfw/source_1/enhanced/`
-3. ✅ Created `runpod_train_sar_source1_only.sh` script for automated training
-4. ✅ Fixed SimpleTuner installation bug (was using `requirements.txt`, now uses `pip install simpletuner[cuda]`)
-5. ✅ Committed fix to GitHub (commit: `16ef9dd`)
-6. ✅ Pulled updated script to RunPod
-7. ✅ Downloaded training data from S3 to `/workspace/lora_training/10_sar/`
+### ✅ MAJOR MILESTONE - BEST MODEL YET! 🎉
 
-### 🔄 IN PROGRESS RIGHT NOW:
-**SimpleTuner is installing** (process 6823, running 15+ seconds, using 10.6% CPU)
-- Command: `pip install -q simpletuner[cuda]`
-- Expected time: 10-15 minutes
-- Status: ✅ Working correctly (verified with `ps aux | grep pip`)
+**Sara LoRA trained successfully using Ostris AI Toolkit on Wan 2.2!**
+- Training dataset: 24 images (SFW + NSFW) with detailed captions
+- LoRA file: `sara_000001500.safetensors` (checkpoint 1500)
+- Trigger word: `Sara`
+- Quality: Excellent consistency and realism
 
-### ⏭️ NEXT STEPS (When you come back online):
+### 🎬 ComfyUI Video Generation Workflow - WORKING!
 
-1. **Check if SimpleTuner finished installing:**
-   ```bash
-   # In RunPod terminal, check if still running:
-   ps aux | grep pip
+**File**: `comfyui_workflow_sara.json` ⭐ **BEST WORKFLOW**
 
-   # If nothing shows, it's done! You should see:
-   # "✓ SimpleTuner installed"
-   # "Step 3: Creating training config..."
-   ```
+**What it does:**
+- Generates realistic images/videos of Sara using Wan 2.2 model
+- Uses Sara LoRA trained on 24 custom images
+- Two-stage generation: High noise → Low noise (MOE architecture)
+- Support for both text-to-image AND text-to-video
 
-2. **If installation completed, training should auto-start:**
-   ```bash
-   # The script will create:
-   # - /workspace/train_config.json
-   # - /workspace/train_sar_flux.sh
-   # - Then run: bash /workspace/train_sar_flux.sh
-   ```
+**Tech Stack:**
+- Base models: Wan 2.2 T2V A14B (GGUF Q8_0 quantization)
+  - High noise model: `Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf`
+  - Low noise model: `Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf`
+- LoRAs:
+  - `sara_000001500.safetensors` (applied on BOTH high & low noise paths)
+  - `Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors` (speed optimization)
+- CLIP: `umt5_xxl_fp8_e4m3fn_scaled.safetensors`
+- VAE: `wan_2.1_vae.safetensors`
 
-3. **Monitor training progress:**
-   ```bash
-   # Training takes ~30-60 minutes
-   # Watch for: "Training Complete!"
-   # Output will be in: /workspace/sar_lora_output/
-   ```
+**Workflow Features:**
+- High noise path: Wan HighNoise → Sara LoRA → KSampler (steps 0-4)
+- Low noise path: Wan LowNoise → Wan Distill LoRA → Sara LoRA → KSampler (steps 4-999)
+- Resolution: 1088x1440 (adjustable)
+- Video length: Configurable (1 frame = image, 21+ frames = video)
+- Sampler: res_2s with beta57 scheduler
 
-4. **If installation failed or stuck:**
-   ```bash
-   # Kill and restart:
-   pkill -9 pip
-   cd /workspace
-   pip install simpletuner[cuda]  # Without -q to see progress
+**Performance:**
+- Image generation: ~60 seconds per image
+- Video generation: Scales with frame count
+- VRAM required: 16GB+ recommended
 
-   # Then run:
-   bash /workspace/ai/runpod_train_sar_source1_only.sh
-   ```
+### 📁 Key Files:
 
-### 🐛 Known Issues & Fixes:
-- ❌ **SimpleTuner git clone + requirements.txt** → ✅ Fixed: Now uses `pip install simpletuner[cuda]`
-- ⏳ **Installation seems frozen** → Normal! Takes 10-15 min, use `ps aux | grep pip` to verify
+**ComfyUI Workflows:**
+- ✅ `comfyui_workflow_sara.json` - **PRODUCTION - USE THIS ONE**
+- ❌ `comfyui_workflow_fixed.json` - Old version without Sara LoRA (DELETE)
+
+**Training Data:**
+- `models_2.0/sara_2.0/` - 24 images + 24 caption files
+- Format: `sara_1.jpg` + `sara_1.txt`, etc.
+- Caption style: "Sara, [features], [clothing], [pose], [location], [sfw/nsfw]"
+
+**Trained Model:**
+- Location: ComfyUI/models/loras/`sara_000001500.safetensors`
+- Training: Ostris AI Toolkit via RunPod
+- Steps: 1500 (optimal checkpoint)
 
 ### 📁 Important File Locations:
 
