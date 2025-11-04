@@ -37,8 +37,10 @@ Rules:
 - Be explicit only if visible
 - No sentences, no fluff, no repetition
 
-Example:
-Sara, olive skin, long dark hair, thick brows, black lace lingerie, kneeling, luxury room, nsfw
+Examples:
+sara_1.txt → Sara, olive skin, dark ponytail, thick brows, blue tank top, lying in bed, selfie, bedroom, sfw
+sara_2.txt → Sara, long dark hair, thick brows, black lace lingerie, pulling bra strap, kneeling, luxury room, nsfw
+sara_3.txt → Sara, nude, small breasts, spread legs, using shower head on pussy, open mouth, bathtub, nsfw
 
 Now describe this image:"""
 
