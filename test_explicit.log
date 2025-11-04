@@ -1,0 +1,41 @@
+🔞 EXPLICIT/SEX Caption Tool
+================================================================================
+🧪 TEST MODE: 3/50 images
+
+🚀 Processing with 3 workers...
+
+🔄 Worker 1 starting (1 images)...
+  📸 Processing: milan_explicit_1.jpg
+
+🔄 Worker 2 starting (1 images)...
+  📸 Processing: milan_explicit_10.jpg
+
+🔄 Worker 3 starting (1 images)...
+  📸 Processing: milan_explicit_11.jpg
+✅ Worker 3 complete!
+✅ Worker 2 complete!
+✅ Worker 1 complete!
+
+💾 Saving caption files...
+✅ Saved 3 caption files
+✅ Saved ranking to: /workspaces/ai/models_2.0/milan/explicit_ranking.json
+
+================================================================================
+📊 EXPLICIT RESULTS
+================================================================================
+
+✅ Successfully processed: 3/3
+
+🏆 TOP RANKED:
+
+1. [92/100] milan_explicit_11.jpg
+   Milan, tan skin, long dark wet hair, full lips, nude, breast...
+2. [88/100] milan_explicit_1.jpg
+   Milan, tan skin, long dark hair tied back, full lips, nude, ...
+3. [88/100] milan_explicit_10.jpg
+   Milan, tan skin, long dark hair, full lips, nude, curvy body...
+
+================================================================================
+✅ COMPLETE!
+📁 Captions: /workspaces/ai/models_2.0/milan/explicit
+📁 Ranking: /workspaces/ai/models_2.0/milan/explicit_ranking.json

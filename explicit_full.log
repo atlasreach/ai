@@ -1,0 +1,108 @@
+🔞 EXPLICIT/SEX Caption Tool
+================================================================================
+🚀 FULL MODE: 53 images
+
+🚀 Processing with 3 workers...
+
+🔄 Worker 1 starting (18 images)...
+  📸 Processing: milan_explicit_1.jpg
+
+🔄 Worker 2 starting (18 images)...
+  📸 Processing: milan_explicit_23.jpg
+
+🔄 Worker 3 starting (17 images)...
+  📸 Processing: milan_explicit_4.jpg
+  📸 Processing: milan_explicit_24.jpg
+  📸 Processing: milan_explicit_40.jpg
+  📸 Processing: milan_explicit_1.txt
+  ❌ Error processing milan_explicit_1.txt: 400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+  📸 Processing: milan_explicit_10.jpg
+  📸 Processing: milan_explicit_25.jpg
+  📸 Processing: milan_explicit_10.txt
+  📸 Processing: milan_explicit_41.jpg
+  📸 Processing: milan_explicit_26.jpg
+  ❌ Error processing milan_explicit_10.txt: 400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+  📸 Processing: milan_explicit_11.jpg
+  📸 Processing: milan_explicit_42.jpg
+  📸 Processing: milan_explicit_27.jpg
+  📸 Processing: milan_explicit_11.txt
+  ❌ Error processing milan_explicit_11.txt: 400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+  📸 Processing: milan_explicit_12.jpg
+  📸 Processing: milan_explicit_43.jpg
+  📸 Processing: milan_explicit_28.jpg
+  📸 Processing: milan_explicit_13.jpg
+  📸 Processing: milan_explicit_44.jpg
+  📸 Processing: milan_explicit_29.jpg
+  📸 Processing: milan_explicit_14.jpg
+  📸 Processing: milan_explicit_45.png
+  📸 Processing: milan_explicit_3.jpg
+  📸 Processing: milan_explicit_15.jpg
+  📸 Processing: milan_explicit_46.jpg
+  📸 Processing: milan_explicit_16.jpg
+  📸 Processing: milan_explicit_30.jpg
+  📸 Processing: milan_explicit_47.jpg
+  📸 Processing: milan_explicit_17.jpg
+  📸 Processing: milan_explicit_48.jpg
+  📸 Processing: milan_explicit_31.jpg
+  📸 Processing: milan_explicit_18.jpg
+  📸 Processing: milan_explicit_49.jpg
+  📸 Processing: milan_explicit_32.jpg
+  📸 Processing: milan_explicit_19.jpg
+  📸 Processing: milan_explicit_5.jpg
+  📸 Processing: milan_explicit_33.jpg
+  📸 Processing: milan_explicit_2.jpg
+  📸 Processing: milan_explicit_50.jpg
+  📸 Processing: milan_explicit_34.jpg
+  📸 Processing: milan_explicit_20.jpg
+  📸 Processing: milan_explicit_6.jpg
+  📸 Processing: milan_explicit_35.jpg
+  📸 Processing: milan_explicit_21.jpg
+  📸 Processing: milan_explicit_7.jpg
+  📸 Processing: milan_explicit_36.jpg
+  📸 Processing: milan_explicit_22.jpg
+  📸 Processing: milan_explicit_8.jpg
+  📸 Processing: milan_explicit_37.jpg
+✅ Worker 1 complete!
+  📸 Processing: milan_explicit_9.jpg
+  📸 Processing: milan_explicit_38.jpg
+✅ Worker 3 complete!
+  📸 Processing: milan_explicit_39.jpg
+✅ Worker 2 complete!
+
+💾 Saving caption files...
+✅ Saved 50 caption files
+✅ Saved ranking to: /workspaces/ai/models_2.0/milan/explicit_ranking.json
+
+================================================================================
+📊 EXPLICIT RESULTS
+================================================================================
+
+✅ Successfully processed: 50/53
+
+🏆 TOP RANKED:
+
+1. [92/100] milan_explicit_1.jpg
+   Milan, tan skin, long dark hair tied back, full lips, nude, ...
+2. [92/100] milan_explicit_18.jpg
+   Milan, tan skin, long dark hair, full lips, nude, breasts vi...
+3. [92/100] milan_explicit_19.jpg
+   Milan, tan skin, long dark hair tied back, full lips, nude, ...
+4. [92/100] milan_explicit_32.jpg
+   Milan, tan skin, long dark hair tied back, full lips, nude, ...
+5. [92/100] milan_explicit_35.jpg
+   Milan, tan skin, long dark straight hair, full lips, nude, b...
+6. [92/100] milan_explicit_38.jpg
+   Milan, tan skin, long dark hair tied back, full lips, nude, ...
+7. [92/100] milan_explicit_4.jpg
+   Milan, tan skin, long dark wavy hair, full lips, nude, breas...
+8. [92/100] milan_explicit_43.jpg
+   Milan, tan skin, long dark hair tied back, full lips, nude, ...
+9. [92/100] milan_explicit_46.jpg
+   Milan, tan skin, long dark hair tied back, nude, breasts vis...
+10. [92/100] milan_explicit_48.jpg
+   Milan, tan skin, long dark hair, full lips, nude, breasts vi...
+
+================================================================================
+✅ COMPLETE!
+📁 Captions: /workspaces/ai/models_2.0/milan/explicit
+📁 Ranking: /workspaces/ai/models_2.0/milan/explicit_ranking.json
