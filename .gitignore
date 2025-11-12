@@ -1,13 +1,34 @@
+no # Secrets - NEVER COMMIT
 .env
+.env.local
+*.key
+*.pem
 
-# Model results (stored in S3)
-models/*/results/
-models/*/lora_training/
-
-# State files
-models/*/progress.json
-
-# Temporary files
+# Python
 *.pyc
 __pycache__/
+venv/
+env/
+*.egg-info/
+
+# Node/React
+node_modules/
+.next/
+build/
+dist/
+
+# Model files (too large for git)
+*.safetensors
+*.ckpt
+*.pt
+
+# Temporary files
+*.tmp
+*.log
+.DS_Store
+
+# Old project files (if needed)
+models/*/results/
+models/*/lora_training/
+models/*/progress.json
 test_s3_connection.py
