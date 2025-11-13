@@ -188,30 +188,41 @@ async def generate(request: GenerationRequest):
             # IMG2IMG generation for Qwen-Image
             # Step 1: Encode image to latents
             print("   Encoding image to latents...")
-            init_latents = pipe.vae.encode(
-                torch.from_numpy(np.array(init_image)).permute(2, 0, 1).unsqueeze(0).float().to(pipe.device) / 255.0
-            ).latent_dist.sample() * pipe.vae.config.scaling_factor
+
+            # Convert PIL to tensor: (H, W, C) -> (1, C, H, W)
+            init_array = np.array(init_image).astype(np.float32) / 255.0
+            init_tensor = torch.from_numpy(init_array).permute(2, 0, 1).unsqueeze(0)
+            init_tensor = init_tensor.to(device=pipe.device, dtype=torch.bfloat16)
+
+            # Normalize to [-1, 1] if needed by VAE
+            init_tensor = init_tensor * 2.0 - 1.0
+
+            # Encode to latents
+            with torch.no_grad():
+                init_latents = pipe.vae.encode(init_tensor).latent_dist.sample()
+                init_latents = init_latents * pipe.vae.config.scaling_factor
 
             # Step 2: Add noise based on strength
             # strength = 0.85 means we keep 15% of original, add 85% noise
-            noise = torch.randn_like(init_latents, generator=generator)
+            noise = torch.randn_like(init_latents, generator=generator, device=pipe.device, dtype=torch.bfloat16)
             timesteps = int(request.num_inference_steps * request.strength)
 
             # Get scheduler timestep for this strength
-            pipe.scheduler.set_timesteps(request.num_inference_steps)
-            timestep = pipe.scheduler.timesteps[-timesteps]
+            pipe.scheduler.set_timesteps(request.num_inference_steps, device=pipe.device)
+
+            # Calculate which timestep to start from based on strength
+            init_timestep = min(int(request.num_inference_steps * request.strength), request.num_inference_steps - 1)
+            timestep_to_start = pipe.scheduler.timesteps[init_timestep]
 
             # Add noise to latents
-            noisy_latents = pipe.scheduler.add_noise(init_latents, noise, timestep)
+            noisy_latents = pipe.scheduler.add_noise(init_latents, noise, timestep_to_start.long())
 
             # Step 3: Denoise from noisy latents
             result = pipe(
                 prompt=request.prompt,
                 negative_prompt=request.negative_prompt,
                 latents=noisy_latents,  # Start from noisy version of input image
-                width=request.width,
-                height=request.height,
-                num_inference_steps=timesteps,  # Only denoise the noisy portion
+                num_inference_steps=request.num_inference_steps - init_timestep,  # Only denoise the noisy portion
                 guidance_scale=request.guidance_scale,
                 generator=generator,
                 num_images_per_prompt=request.num_images,
