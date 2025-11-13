@@ -12,7 +12,7 @@ import os
 load_dotenv()
 
 # Import routers
-from backend.routers import characters, proxy
+from backend.routers import characters, proxy, vision
 # from backend.routers import generate  # Disabled - using proxy instead
 
 
@@ -38,6 +38,7 @@ app.add_middleware(
 # app.include_router(generate.router, prefix="/api")  # Disabled - using proxy instead
 app.include_router(characters.router, prefix="/api")
 app.include_router(proxy.router, prefix="/api/proxy")
+app.include_router(vision.router, prefix="/api")
 
 
 @app.get("/")

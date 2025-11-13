@@ -5,13 +5,15 @@ Run this ON RUNPOD to expose generation endpoint
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import torch
 from diffusers import DiffusionPipeline, FlowMatchEulerDiscreteScheduler
+from diffusers.utils import load_image
 import math
 import base64
 from io import BytesIO
 import os
+from PIL import Image
 
 app = FastAPI(
     title="RunPod Image Generation API",
@@ -43,9 +45,20 @@ class GenerationRequest(BaseModel):
     seed: Optional[int] = None
     lora_strength: float = 0.8
 
+    # IMG2IMG support
+    init_image_base64: Optional[str] = None  # Base64 encoded input image
+    strength: float = 0.85  # Denoise strength (0.0-1.0) - 0.85 matches ComfyUI
+
+    # Batch generation
+    num_images: int = 1  # Generate multiple images at once
+
+    # Upscaling
+    upscale_factor: float = 1.0  # 1.0=no upscale, 1.5=1.5x, 2.0=2x
+
 class GenerationResponse(BaseModel):
     success: bool
-    image_base64: Optional[str] = None
+    image_base64: Optional[str] = None  # Single image (for backwards compatibility)
+    images_base64: Optional[List[str]] = None  # Multiple images (for batch generation)
     error: Optional[str] = None
     generation_time: Optional[float] = None
 
@@ -157,31 +170,73 @@ async def generate(request: GenerationRequest):
         if request.seed:
             generator = torch.manual_seed(request.seed)
 
-        print(f"🎨 Generating: '{request.prompt[:50]}...'")
+        # Check if img2img or text2img
+        init_image = None
+        if request.init_image_base64:
+            # Decode base64 image for img2img
+            print(f"🖼️  IMG2IMG mode (strength: {request.strength})")
+            image_data = base64.b64decode(request.init_image_base64)
+            init_image = Image.open(BytesIO(image_data)).convert("RGB")
+            # Resize to target dimensions
+            init_image = init_image.resize((request.width, request.height))
 
-        # Generate image
-        image = pipe(
-            prompt=request.prompt,
-            negative_prompt=request.negative_prompt,
-            width=request.width,
-            height=request.height,
-            num_inference_steps=request.num_inference_steps,
-            guidance_scale=request.guidance_scale,
-            generator=generator,
-        ).images[0]
+        print(f"🎨 Generating {request.num_images} image(s): '{request.prompt[:50]}...'")
+
+        # Generate images (supports batch)
+        if init_image:
+            # IMG2IMG generation
+            result = pipe(
+                prompt=request.prompt,
+                negative_prompt=request.negative_prompt,
+                image=init_image,
+                strength=request.strength,  # Denoise amount (0.85 = 85% new, 15% original)
+                width=request.width,
+                height=request.height,
+                num_inference_steps=request.num_inference_steps,
+                guidance_scale=request.guidance_scale,
+                generator=generator,
+                num_images_per_prompt=request.num_images,
+            )
+        else:
+            # TEXT2IMG generation
+            result = pipe(
+                prompt=request.prompt,
+                negative_prompt=request.negative_prompt,
+                width=request.width,
+                height=request.height,
+                num_inference_steps=request.num_inference_steps,
+                guidance_scale=request.guidance_scale,
+                generator=generator,
+                num_images_per_prompt=request.num_images,
+            )
+
+        images = result.images
+
+        # Apply upscaling if requested
+        if request.upscale_factor > 1.0:
+            print(f"🔍 Upscaling {request.upscale_factor}x...")
+            upscaled = []
+            for img in images:
+                new_width = int(img.width * request.upscale_factor)
+                new_height = int(img.height * request.upscale_factor)
+                upscaled.append(img.resize((new_width, new_height), Image.LANCZOS))
+            images = upscaled
 
         # Convert to base64
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+        images_base64 = []
+        for img in images:
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            images_base64.append(base64.b64encode(buffered.getvalue()).decode())
 
         generation_time = time.time() - start_time
 
-        print(f"✅ Generated in {generation_time:.1f}s")
+        print(f"✅ Generated {len(images)} image(s) in {generation_time:.1f}s")
 
         return GenerationResponse(
             success=True,
-            image_base64=img_base64,
+            image_base64=images_base64[0],  # First image for backwards compatibility
+            images_base64=images_base64,  # All images for batch generation
             generation_time=generation_time
         )
 
