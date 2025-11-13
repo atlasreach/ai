@@ -34,13 +34,14 @@ def generate_with_milan():
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(scheduler_config)
 
-        # Load Qwen-Image pipeline
+        # Load Qwen-Image pipeline with automatic memory management
         pipe = DiffusionPipeline.from_pretrained(
             "Qwen/Qwen-Image",
             scheduler=scheduler,
-            torch_dtype=torch.bfloat16
+            torch_dtype=torch.bfloat16,
+            device_map="auto",  # Automatically handle memory
+            low_cpu_mem_usage=True
         )
-        pipe = pipe.to("cuda")
 
         print("   ✅ Base model loaded")
 
