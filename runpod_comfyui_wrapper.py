@@ -48,7 +48,7 @@ app.add_middleware(
 )
 
 # ComfyUI endpoint
-COMFYUI_URL = "https://zly4w0etf28llh-3001.proxy.runpod.net"
+COMFYUI_URL = "https://slai6mcmlxsqvh-3001.proxy.runpod.net"
 WORKFLOW_PATH = "/workspaces/ai/qwen instagram influencer workflow (Aiorbust).json"
 
 class GenerationRequest(BaseModel):
