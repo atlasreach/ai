@@ -270,10 +270,10 @@
 
                 <div class="slider-group">
                     <div class="slider-label">
-                        <label>Steps</label>
-                        <span class="slider-value" id="stepsValue">30</span>
+                        <label>Steps (lower = faster testing)</label>
+                        <span class="slider-value" id="stepsValue">10</span>
                     </div>
-                    <input type="range" id="steps" min="10" max="50" step="5" value="30">
+                    <input type="range" id="steps" min="5" max="50" step="5" value="10">
                 </div>
 
                 <div class="slider-group">
@@ -286,18 +286,18 @@
 
                 <div class="slider-group">
                     <div class="slider-label">
-                        <label>Width</label>
-                        <span class="slider-value" id="widthValue">1024</span>
+                        <label>Width (smaller = faster)</label>
+                        <span class="slider-value" id="widthValue">512</span>
                     </div>
-                    <input type="range" id="width" min="512" max="1536" step="64" value="1024">
+                    <input type="range" id="width" min="512" max="1536" step="64" value="512">
                 </div>
 
                 <div class="slider-group">
                     <div class="slider-label">
-                        <label>Height</label>
-                        <span class="slider-value" id="heightValue">768</span>
+                        <label>Height (smaller = faster)</label>
+                        <span class="slider-value" id="heightValue">512</span>
                     </div>
-                    <input type="range" id="height" min="512" max="1536" step="64" value="768">
+                    <input type="range" id="height" min="512" max="1536" step="64" value="512">
                 </div>
 
                 <div class="form-group">
@@ -341,7 +341,7 @@
             const resultDiv = document.getElementById('result');
 
             // Get settings
-            const apiUrl = window.location.origin.replace(':3000', ':8000') + '/api/proxy';
+            const apiUrl = 'https://1314jk61pzkjdb-8001.proxy.runpod.net';
             const prompt = document.getElementById('prompt').value;
             const negativePrompt = document.getElementById('negativePrompt').value;
             const character = document.getElementById('character').value;
