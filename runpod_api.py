@@ -14,6 +14,7 @@ import base64
 from io import BytesIO
 import os
 from PIL import Image
+import numpy as np
 
 app = FastAPI(
     title="RunPod Image Generation API",
@@ -184,15 +185,33 @@ async def generate(request: GenerationRequest):
 
         # Generate images (supports batch)
         if init_image:
-            # IMG2IMG generation
+            # IMG2IMG generation for Qwen-Image
+            # Step 1: Encode image to latents
+            print("   Encoding image to latents...")
+            init_latents = pipe.vae.encode(
+                torch.from_numpy(np.array(init_image)).permute(2, 0, 1).unsqueeze(0).float().to(pipe.device) / 255.0
+            ).latent_dist.sample() * pipe.vae.config.scaling_factor
+
+            # Step 2: Add noise based on strength
+            # strength = 0.85 means we keep 15% of original, add 85% noise
+            noise = torch.randn_like(init_latents, generator=generator)
+            timesteps = int(request.num_inference_steps * request.strength)
+
+            # Get scheduler timestep for this strength
+            pipe.scheduler.set_timesteps(request.num_inference_steps)
+            timestep = pipe.scheduler.timesteps[-timesteps]
+
+            # Add noise to latents
+            noisy_latents = pipe.scheduler.add_noise(init_latents, noise, timestep)
+
+            # Step 3: Denoise from noisy latents
             result = pipe(
                 prompt=request.prompt,
                 negative_prompt=request.negative_prompt,
-                image=init_image,
-                strength=request.strength,  # Denoise amount (0.85 = 85% new, 15% original)
+                latents=noisy_latents,  # Start from noisy version of input image
                 width=request.width,
                 height=request.height,
-                num_inference_steps=request.num_inference_steps,
+                num_inference_steps=timesteps,  # Only denoise the noisy portion
                 guidance_scale=request.guidance_scale,
                 generator=generator,
                 num_images_per_prompt=request.num_images,
