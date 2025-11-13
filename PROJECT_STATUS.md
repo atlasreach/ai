@@ -1,7 +1,7 @@
 # AI Character Generation Platform - Project Status
 
-**Last Updated:** Nov 12, 2025
-**Status:** 🚀 Ready to Build
+**Last Updated:** Nov 13, 2025
+**Status:** ✅ GENERATION WORKING - Building API
 
 ---
 
@@ -10,17 +10,21 @@
 ### **Services Configured:**
 - ✅ **Grok API** - Prompt enhancement (xai-AOY...)
 - ✅ **Hugging Face** - Model storage (nicksanford2341/businessmodels)
-- ✅ **RunPod GPU** - RTX 5090 running ComfyUI
+- ✅ **RunPod GPU** - RTX 5090 with Diffusers ⭐ **WORKING**
   - Pod ID: `1314jk61pzkjdb`
-  - URL: `https://1314jk61pzkjdb-3001.proxy.runpod.net`
-  - Status: ✅ Online, ComfyUI v0.3.57
+  - Generation: Qwen-Image + Milan LoRA via Diffusers
+  - Status: ✅ Tested and generating images successfully
 - ✅ **AWS S3** - Image storage bucket created
   - Bucket: `ai-character-generations` (us-east-2)
   - Public URL: `https://ai-character-generations.s3.us-east-2.amazonaws.com/`
 
 ### **Available Character Models:**
-1. **Milan** - `milan_000002000.safetensors` (295 MB, 2000 steps)
-2. **Milan Alt** - `milan_000001750.safetensors` (295 MB, 1750 steps)
+1. **Milan** - `milan_000002000.safetensors` (295 MB, 2000 steps) ⭐ **TESTED & WORKING**
+
+### **Key Decision: Switched from ComfyUI to Diffusers**
+- ❌ ComfyUI: Kept crashing, complex workflow format issues
+- ✅ Diffusers: Working reliably, easier to integrate, same quality
+- See: `DIFFUSERS_SETUP.md` for technical details
 
 ---
 
