@@ -12,7 +12,8 @@ import os
 load_dotenv()
 
 # Import routers
-from backend.routers import generate, characters
+from backend.routers import characters, proxy
+# from backend.routers import generate  # Disabled - using proxy instead
 
 
 # Create FastAPI app
@@ -34,8 +35,9 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(generate.router, prefix="/api")
+# app.include_router(generate.router, prefix="/api")  # Disabled - using proxy instead
 app.include_router(characters.router, prefix="/api")
+app.include_router(proxy.router, prefix="/api/proxy")
 
 
 @app.get("/")

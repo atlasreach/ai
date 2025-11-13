@@ -232,14 +232,9 @@
                 <h2>Generation Settings</h2>
 
                 <div class="info">
-                    <strong>⚠️ Setup Required:</strong><br>
-                    1. Start RunPod API: <code>python3 runpod_api.py</code><br>
-                    2. Update API URL below with your RunPod URL
-                </div>
-
-                <div class="form-group">
-                    <label>RunPod API URL</label>
-                    <input type="text" id="apiUrl" value="http://your-runpod-ip:8001" placeholder="http://your-runpod-ip:8001">
+                    <strong>✅ Ready to Generate!</strong><br>
+                    Backend is proxying to RunPod automatically<br>
+                    Just adjust settings and click Generate
                 </div>
 
                 <div class="form-group">
@@ -257,6 +252,12 @@
                 <div class="form-group">
                     <label>Negative Prompt</label>
                     <textarea id="negativePrompt" placeholder="blurry, low quality, distorted">blurry, low quality, distorted</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>Reference Image (Optional - Coming Soon)</label>
+                    <input type="file" id="referenceImage" accept="image/*" disabled style="opacity: 0.5;">
+                    <small style="color: #999; font-size: 12px;">Image-to-image feature will be added next</small>
                 </div>
 
                 <div class="slider-group">
@@ -340,7 +341,7 @@
             const resultDiv = document.getElementById('result');
 
             // Get settings
-            const apiUrl = document.getElementById('apiUrl').value;
+            const apiUrl = window.location.origin.replace(':3000', ':8000') + '/api/proxy';
             const prompt = document.getElementById('prompt').value;
             const negativePrompt = document.getElementById('negativePrompt').value;
             const character = document.getElementById('character').value;
