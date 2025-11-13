@@ -86,6 +86,17 @@ class GenerationResponse(BaseModel):
     s3_output_url: Optional[str] = None  # Generated output image
     s3_metadata_url: Optional[str] = None  # JSON metadata file
 
+class InpaintRequest(BaseModel):
+    image_base64: str  # Original image to inpaint
+    mask_base64: str   # Mask image (white = inpaint, black = keep)
+    prompt: str        # What to put in masked area
+    negative_prompt: Optional[str] = "blurry, low quality, distorted"
+    character: str = "milan"
+    num_inference_steps: int = 30
+    guidance_scale: float = 4.0
+    seed: Optional[int] = None
+    use_grok_enhancement: bool = False  # Enhance prompt with Grok
+
 @app.get("/")
 async def root():
     return {
@@ -571,6 +582,288 @@ async def generate(request: GenerationRequest):
 
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+        return GenerationResponse(
+            success=False,
+            error=str(e)
+        )
+
+@app.post("/inpaint", response_model=GenerationResponse)
+async def inpaint(request: InpaintRequest):
+    """Inpaint specific areas of an image (edit clothes, background, etc.)"""
+
+    try:
+        start_time = time.time()
+
+        # 1. Load inpaint workflow
+        workflow_path = "/workspaces/ai/Flux Fill Inpaint (Cloths swap).json"
+        print(f"📂 Loading inpaint workflow from {workflow_path}")
+        with open(workflow_path) as f:
+            workflow_ui = json.load(f)
+
+        # 2. Enhance prompt with Grok if requested
+        final_prompt = request.prompt
+        if request.use_grok_enhancement and GROK_API_KEY:
+            print(f"🤖 Enhancing prompt with Grok...")
+            try:
+                grok_response = requests.post(
+                    "https://api.x.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROK_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "grok-2-1212",
+                        "messages": [{
+                            "role": "user",
+                            "content": f"Enhance this inpainting prompt for consistency and quality. Keep it concise but detailed. Start with '{request.character}': {request.prompt}"
+                        }],
+                        "temperature": 0.3
+                    },
+                    timeout=10
+                )
+                if grok_response.status_code == 200:
+                    final_prompt = grok_response.json()['choices'][0]['message']['content'].strip()
+                    print(f"   ✅ Enhanced prompt: {final_prompt[:100]}...")
+            except Exception as e:
+                print(f"   ⚠️  Grok enhancement failed: {e}, using original prompt")
+
+        # 3. Upload original image to ComfyUI
+        print(f"🖼️  Uploading original image...")
+        try:
+            image_data = base64.b64decode(request.image_base64)
+            files = {'image': ('original.png', BytesIO(image_data), 'image/png')}
+
+            upload_response = requests.post(
+                f"{COMFYUI_URL}/upload/image",
+                files=files,
+                timeout=30
+            )
+
+            if upload_response.status_code == 200:
+                original_filename = upload_response.json().get("name")
+                print(f"   ✅ Uploaded original: {original_filename}")
+            else:
+                raise Exception(f"Upload failed: {upload_response.status_code}")
+        except Exception as e:
+            return GenerationResponse(
+                success=False,
+                error=f"Failed to upload original image: {str(e)}"
+            )
+
+        # 4. Upload mask image to ComfyUI
+        print(f"🎭 Uploading mask...")
+        try:
+            mask_data = base64.b64decode(request.mask_base64)
+            files = {'image': ('mask.png', BytesIO(mask_data), 'image/png')}
+
+            upload_response = requests.post(
+                f"{COMFYUI_URL}/upload/image",
+                files=files,
+                timeout=30
+            )
+
+            if upload_response.status_code == 200:
+                mask_filename = upload_response.json().get("name")
+                print(f"   ✅ Uploaded mask: {mask_filename}")
+            else:
+                raise Exception(f"Mask upload failed: {upload_response.status_code}")
+        except Exception as e:
+            return GenerationResponse(
+                success=False,
+                error=f"Failed to upload mask: {str(e)}"
+            )
+
+        # 5. Update workflow nodes
+        # Node 415: LoadImage (original image with mask)
+        for node in workflow_ui["nodes"]:
+            if node.get("id") == 415 and node.get("type") == "LoadImage":
+                node["widgets_values"][0] = original_filename
+                print(f"   ✅ Updated LoadImage node with {original_filename}")
+                break
+
+        # Node 416: Disable clothing reference (not using cloth swap)
+        for node in workflow_ui["nodes"]:
+            if node.get("id") == 416 and node.get("type") == "LoadImage":
+                node["mode"] = 4  # Bypass
+                print(f"   ⏭️  Disabled clothing reference node")
+                break
+
+        # Node 23: Update prompt
+        for node in workflow_ui["nodes"]:
+            if node.get("id") == 23 and node.get("type") == "CLIPTextEncode":
+                node["widgets_values"][0] = final_prompt
+                print(f"   ✅ Updated prompt: {final_prompt[:50]}...")
+                break
+
+        # 6. Convert workflow to API format
+        print("🔄 Converting workflow to API format...")
+        workflow_api = convert_workflow_to_api_format(workflow_ui)
+        print(f"   ✅ Converted {len(workflow_api)} nodes")
+
+        # 7. Submit to ComfyUI
+        print("🚀 Submitting to ComfyUI...")
+        submit_response = requests.post(
+            f"{COMFYUI_URL}/prompt",
+            json={"prompt": workflow_api},
+            timeout=30
+        )
+
+        if submit_response.status_code != 200:
+            return GenerationResponse(
+                success=False,
+                error=f"ComfyUI submission failed: {submit_response.text}"
+            )
+
+        result = submit_response.json()
+        if "error" in result:
+            return GenerationResponse(
+                success=False,
+                error=f"ComfyUI error: {result['error']}"
+            )
+
+        prompt_id = result.get("prompt_id")
+        if not prompt_id:
+            return GenerationResponse(
+                success=False,
+                error=f"No prompt_id returned: {result}"
+            )
+
+        print(f"   ✅ Queued: {prompt_id}")
+
+        # 8. Poll for completion (same logic as /generate)
+        print("⏳ Waiting for inpainting...")
+        max_wait = 300
+        poll_start = time.time()
+
+        while time.time() - poll_start < max_wait:
+            try:
+                history_response = requests.get(
+                    f"{COMFYUI_URL}/history/{prompt_id}",
+                    timeout=10
+                )
+
+                if history_response.status_code != 200:
+                    time.sleep(2)
+                    continue
+
+                history = history_response.json()
+
+                if prompt_id in history:
+                    elapsed = time.time() - poll_start
+                    print(f"   ✅ Inpainting complete in {elapsed:.1f}s")
+
+                    outputs = history[prompt_id].get("outputs", {})
+                    if not outputs:
+                        return GenerationResponse(
+                            success=False,
+                            error="Inpainting completed but no outputs found"
+                        )
+
+                    # Download result images
+                    images_base64 = []
+                    for node_id, output in outputs.items():
+                        if "images" in output:
+                            for image_info in output["images"]:
+                                filename = image_info.get("filename")
+                                subfolder = image_info.get("subfolder", "")
+
+                                if not filename:
+                                    continue
+
+                                print(f"   📥 Downloading {filename}...")
+                                image_url = f"{COMFYUI_URL}/view?filename={filename}&subfolder={subfolder}&type=output"
+
+                                image_response = requests.get(image_url, timeout=30)
+                                if image_response.status_code == 200:
+                                    image_b64 = base64.b64encode(image_response.content).decode()
+                                    images_base64.append(image_b64)
+                                    print(f"   ✅ Downloaded {filename}")
+
+                    if not images_base64:
+                        return GenerationResponse(
+                            success=False,
+                            error="No images could be downloaded"
+                        )
+
+                    total_time = time.time() - start_time
+
+                    # Save to S3 and local
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    model_name = request.character.lower()
+                    s3_base_path = f"inpaints/{model_name}/{timestamp}"
+                    local_base_path = f"/workspaces/ai/outputs/{model_name}/{timestamp}"
+                    os.makedirs(local_base_path, exist_ok=True)
+
+                    s3_output_url = None
+                    try:
+                        output_data = base64.b64decode(images_base64[0])
+
+                        # Save locally
+                        local_output_path = f"{local_base_path}/inpaint_output.png"
+                        with open(local_output_path, "wb") as f:
+                            f.write(output_data)
+                        print(f"   💾 Saved to {local_output_path}")
+
+                        # Upload to S3
+                        s3_output_path = f"{s3_base_path}/inpaint_output.png"
+                        s3_output_url = upload_to_s3(output_data, s3_output_path, "image/png")
+
+                        # Save metadata
+                        metadata = {
+                            "model": model_name,
+                            "timestamp": timestamp,
+                            "workflow": "inpaint",
+                            "prompt": final_prompt,
+                            "negative_prompt": request.negative_prompt,
+                            "parameters": {
+                                "steps": request.num_inference_steps,
+                                "cfg_scale": request.guidance_scale,
+                                "seed": request.seed,
+                                "grok_enhanced": request.use_grok_enhancement
+                            },
+                            "generation_time": total_time
+                        }
+                        metadata_json = json.dumps(metadata, indent=2)
+
+                        local_metadata_path = f"{local_base_path}/metadata.json"
+                        with open(local_metadata_path, "w") as f:
+                            f.write(metadata_json)
+
+                        print(f"💾 Saved locally: {local_base_path}/")
+                        print(f"☁️  Saved to S3: {s3_base_path}/")
+                    except Exception as e:
+                        print(f"⚠️  Save error (non-fatal): {e}")
+
+                    return GenerationResponse(
+                        success=True,
+                        image_base64=images_base64[0],
+                        images_base64=images_base64,
+                        generation_time=total_time,
+                        s3_output_url=s3_output_url
+                    )
+
+                # Still generating
+                elapsed = time.time() - poll_start
+                if int(elapsed) % 10 == 0:
+                    print(f"   ⏳ Still inpainting... ({elapsed:.0f}s)")
+
+                time.sleep(2)
+
+            except Exception as e:
+                print(f"   ⚠️  Poll error: {e}")
+                time.sleep(2)
+                continue
+
+        return GenerationResponse(
+            success=False,
+            error=f"Inpainting timeout after {max_wait}s"
+        )
+
+    except Exception as e:
+        print(f"❌ Inpaint error: {e}")
         import traceback
         traceback.print_exc()
 
