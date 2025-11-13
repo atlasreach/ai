@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Character Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            padding: 30px;
+        }
+
+        .section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 15px;
+        }
+
+        .section h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+        }
+
+        input[type="text"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .slider-group {
+            margin-bottom: 20px;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .slider-value {
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 5px;
+            background: #e0e0e0;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+
+        .button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result {
+            text-align: center;
+        }
+
+        .result img {
+            max-width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 18px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            color: #c00;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .info {
+            background: #e8f4ff;
+            color: #0066cc;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 AI Character Generator</h1>
+            <p>Generate professional images with your trained AI models</p>
+        </div>
+
+        <div class="content">
+            <!-- Left Panel: Settings -->
+            <div class="section">
+                <h2>Generation Settings</h2>
+
+                <div class="info">
+                    <strong>⚠️ Setup Required:</strong><br>
+                    1. Start RunPod API: <code>python3 runpod_api.py</code><br>
+                    2. Update API URL below with your RunPod URL
+                </div>
+
+                <div class="form-group">
+                    <label>RunPod API URL</label>
+                    <input type="text" id="apiUrl" value="http://your-runpod-ip:8001" placeholder="http://your-runpod-ip:8001">
+                </div>
+
+                <div class="form-group">
+                    <label>Character</label>
+                    <select id="character">
+                        <option value="milan">Milan</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Prompt</label>
+                    <textarea id="prompt" placeholder="Milan, woman, professional photo, studio lighting">Milan, woman, professional photo, studio lighting</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>Negative Prompt</label>
+                    <textarea id="negativePrompt" placeholder="blurry, low quality, distorted">blurry, low quality, distorted</textarea>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <label>LoRA Strength</label>
+                        <span class="slider-value" id="loraValue">0.8</span>
+                    </div>
+                    <input type="range" id="loraStrength" min="0" max="1" step="0.1" value="0.8">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <label>Steps</label>
+                        <span class="slider-value" id="stepsValue">30</span>
+                    </div>
+                    <input type="range" id="steps" min="10" max="50" step="5" value="30">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <label>Guidance Scale (CFG)</label>
+                        <span class="slider-value" id="guidanceValue">4.0</span>
+                    </div>
+                    <input type="range" id="guidance" min="1" max="10" step="0.5" value="4.0">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <label>Width</label>
+                        <span class="slider-value" id="widthValue">1024</span>
+                    </div>
+                    <input type="range" id="width" min="512" max="1536" step="64" value="1024">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <label>Height</label>
+                        <span class="slider-value" id="heightValue">768</span>
+                    </div>
+                    <input type="range" id="height" min="512" max="1536" step="64" value="768">
+                </div>
+
+                <div class="form-group">
+                    <label>Seed (optional, -1 for random)</label>
+                    <input type="text" id="seed" value="-1" placeholder="-1">
+                </div>
+
+                <button class="button" id="generateBtn" onclick="generate()">Generate Image</button>
+            </div>
+
+            <!-- Right Panel: Result -->
+            <div class="section">
+                <h2>Generated Image</h2>
+                <div id="result" class="result">
+                    <p style="color: #999; padding: 60px 20px;">Your generated image will appear here</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Update slider values in real-time
+        document.getElementById('loraStrength').oninput = function() {
+            document.getElementById('loraValue').textContent = this.value;
+        };
+        document.getElementById('steps').oninput = function() {
+            document.getElementById('stepsValue').textContent = this.value;
+        };
+        document.getElementById('guidance').oninput = function() {
+            document.getElementById('guidanceValue').textContent = this.value;
+        };
+        document.getElementById('width').oninput = function() {
+            document.getElementById('widthValue').textContent = this.value;
+        };
+        document.getElementById('height').oninput = function() {
+            document.getElementById('heightValue').textContent = this.value;
+        };
+
+        async function generate() {
+            const btn = document.getElementById('generateBtn');
+            const resultDiv = document.getElementById('result');
+
+            // Get settings
+            const apiUrl = document.getElementById('apiUrl').value;
+            const prompt = document.getElementById('prompt').value;
+            const negativePrompt = document.getElementById('negativePrompt').value;
+            const character = document.getElementById('character').value;
+            const loraStrength = parseFloat(document.getElementById('loraStrength').value);
+            const steps = parseInt(document.getElementById('steps').value);
+            const guidance = parseFloat(document.getElementById('guidance').value);
+            const width = parseInt(document.getElementById('width').value);
+            const height = parseInt(document.getElementById('height').value);
+            const seed = parseInt(document.getElementById('seed').value);
+
+            // Validate
+            if (!prompt.trim()) {
+                alert('Please enter a prompt');
+                return;
+            }
+
+            // Show loading
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+            resultDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Generating your image...</p><p style="font-size: 14px; color: #999; margin-top: 10px;">This takes 60-90 seconds</p></div>';
+
+            try {
+                const response = await fetch(`${apiUrl}/generate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        prompt,
+                        negative_prompt: negativePrompt,
+                        character,
+                        width,
+                        height,
+                        num_inference_steps: steps,
+                        guidance_scale: guidance,
+                        seed: seed === -1 ? null : seed,
+                        lora_strength: loraStrength
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success && data.image_base64) {
+                    resultDiv.innerHTML = `
+                        <img src="data:image/png;base64,${data.image_base64}" alt="Generated image">
+                        <p style="margin-top: 15px; color: #999; font-size: 14px;">Generated in ${data.generation_time.toFixed(1)}s</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">Failed to connect to API: ${error.message}<br><br>Make sure RunPod API is running and URL is correct.</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Image';
+            }
+        }
+    </script>
+</body>
+</html>
