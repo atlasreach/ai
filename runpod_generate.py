@@ -34,12 +34,12 @@ def generate_with_milan():
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_config(scheduler_config)
 
-        # Load Qwen-Image pipeline with automatic memory management
+        # Load Qwen-Image pipeline with balanced memory management
         pipe = DiffusionPipeline.from_pretrained(
             "Qwen/Qwen-Image",
             scheduler=scheduler,
             torch_dtype=torch.bfloat16,
-            device_map="auto",  # Automatically handle memory
+            device_map="balanced",  # Balance memory across devices
             low_cpu_mem_usage=True
         )
 
