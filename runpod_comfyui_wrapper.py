@@ -49,7 +49,8 @@ app.add_middleware(
 
 # ComfyUI endpoint
 COMFYUI_URL = "https://slai6mcmlxsqvh-3001.proxy.runpod.net"
-WORKFLOW_PATH = "/workspaces/ai/qwen instagram influencer workflow (Aiorbust).json"
+WORKFLOW_PATH_SINGLE = "/workspaces/ai/qwen instagram influencer workflow (Aiorbust).json"
+WORKFLOW_PATH_BATCH = "/workspaces/ai/qwen instagram influencer workflow batch generation (Aiorbust).json"
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -217,9 +218,11 @@ async def generate(request: GenerationRequest):
     try:
         start_time = time.time()
 
-        # 1. Load workflow
-        print(f"📂 Loading workflow from {WORKFLOW_PATH}")
-        with open(WORKFLOW_PATH) as f:
+        # 1. Load workflow (choose based on num_images)
+        use_batch = request.num_images > 1
+        workflow_path = WORKFLOW_PATH_BATCH if use_batch else WORKFLOW_PATH_SINGLE
+        print(f"📂 Loading {'BATCH' if use_batch else 'SINGLE'} workflow from {workflow_path}")
+        with open(workflow_path) as f:
             workflow_ui = json.load(f)
 
         # 2. Update positive prompt (node 6)
@@ -314,15 +317,26 @@ async def generate(request: GenerationRequest):
 
                 break
 
-        # 5c. Update dimensions and batch size (EmptySD3LatentImage node 58)
+        # 5c. Update dimensions (EmptySD3LatentImage node 58)
         # Widget mapping: [width, height, batch_size]
+        # Note: batch_size stays at 1 when using batch workflow (RepeatLatentBatch handles batch)
         for node in workflow_ui["nodes"]:
             if node.get("id") == 58 and node.get("type") == "EmptySD3LatentImage":
                 node["widgets_values"][0] = request.width
                 node["widgets_values"][1] = request.height
-                node["widgets_values"][2] = request.num_images
-                print(f"   ✅ Updated dimensions to {request.width}x{request.height}, batch: {request.num_images}")
+                # Only set batch_size if single workflow
+                if not use_batch:
+                    node["widgets_values"][2] = request.num_images
+                print(f"   ✅ Updated dimensions to {request.width}x{request.height}")
                 break
+
+        # 5c2. Update RepeatLatentBatch if using batch workflow (node 83)
+        if use_batch:
+            for node in workflow_ui["nodes"]:
+                if node.get("id") == 83 and node.get("type") == "RepeatLatentBatch":
+                    node["widgets_values"][0] = request.num_images
+                    print(f"   ✅ Updated RepeatLatentBatch to generate {request.num_images} images")
+                    break
 
         # 5d. Update model sampling shift (ModelSamplingAuraFlow node 66)
         # Widget mapping: [shift]
@@ -370,6 +384,12 @@ async def generate(request: GenerationRequest):
         print("🔄 Converting workflow to API format...")
         workflow_api = convert_workflow_to_api_format(workflow_ui)
         print(f"   ✅ Converted {len(workflow_api)} nodes")
+
+        # 6b. Fix RepeatLatentBatch node if using batch workflow
+        # The converter doesn't include widgets_values as inputs, so we need to add "amount" manually
+        if use_batch and "83" in workflow_api:
+            workflow_api["83"]["inputs"]["amount"] = request.num_images
+            print(f"   ✅ Added 'amount' parameter to RepeatLatentBatch node: {request.num_images}")
 
         # 7. Submit to ComfyUI
         print("🚀 Submitting to ComfyUI...")
@@ -876,7 +896,9 @@ if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting ComfyUI Wrapper API...")
     print(f"   ComfyUI: {COMFYUI_URL}")
-    print(f"   Workflow: {WORKFLOW_PATH}")
+    print(f"   Workflow (Single): {WORKFLOW_PATH_SINGLE}")
+    print(f"   Workflow (Batch): {WORKFLOW_PATH_BATCH}")
     print(f"   Server: http://0.0.0.0:8001")
     print("   IMG2IMG: ✅ ENABLED")
+    print("   Batch Mode: ✅ AUTO (num_images > 1)")
     uvicorn.run(app, host="0.0.0.0", port=8001)
