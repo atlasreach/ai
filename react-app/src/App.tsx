@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import axios from 'axios'
 import './App.css'
 
@@ -19,6 +19,8 @@ interface GenerationParams {
   strength: number
   num_images: number
   upscale_factor: number
+  enable_upscaling: boolean
+  model_sampling_shift: number
 }
 
 interface GenerationResult {
@@ -47,7 +49,9 @@ function App() {
     init_image_base64: null,
     strength: 0.85,
     num_images: 1,
-    upscale_factor: 1.5
+    upscale_factor: 1.5,
+    enable_upscaling: false,
+    model_sampling_shift: 2.0
   })
 
   const [isGenerating, setIsGenerating] = useState(false)
@@ -58,6 +62,9 @@ function App() {
   const [grokCaption, setGrokCaption] = useState<string>('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [s3Urls, setS3Urls] = useState<{input?: string, output?: string, metadata?: string}>({})
+
+  // Ref for file input to reset it
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const models = [
     { value: 'milan', label: 'Milan' },
@@ -112,6 +119,10 @@ function App() {
     setParams({ ...params, init_image_base64: null })
     setPreviewImage(null)
     setGrokCaption('')
+    // Reset file input so you can re-upload the same file
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
   }
 
   // Generate image
@@ -208,6 +219,7 @@ function App() {
                     <p className="text-sm text-gray-500">Auto-analyzes with Grok Vision</p>
                   </div>
                   <input
+                    ref={fileInputRef}
                     type="file"
                     className="hidden"
                     accept="image/*"
@@ -341,6 +353,74 @@ function App() {
                   className="w-full mt-2 bg-slate-900 border border-slate-600 rounded-lg p-2 text-white"
                 />
               </div>
+
+              {/* Batch Size */}
+              <div>
+                <label className="text-sm text-gray-400">Batch Size (Number of Images)</label>
+                <input
+                  type="range"
+                  min="1"
+                  max="4"
+                  step="1"
+                  value={params.num_images}
+                  onChange={(e) => setParams({ ...params, num_images: parseInt(e.target.value) })}
+                  className="w-full mt-2"
+                />
+                <div className="text-right text-sm mt-1 text-white font-semibold">{params.num_images}</div>
+              </div>
+            </div>
+
+            {/* Advanced Parameters */}
+            <div className="bg-slate-800/50 backdrop-blur rounded-xl p-6 border border-slate-700 space-y-4">
+              <h2 className="text-xl font-semibold mb-4">Advanced Settings</h2>
+
+              {/* Enable Upscaling */}
+              <div className="flex items-center justify-between">
+                <label className="text-sm text-gray-400">Enable Upscaling</label>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={params.enable_upscaling}
+                    onChange={(e) => setParams({ ...params, enable_upscaling: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                </label>
+              </div>
+
+              {/* Upscale Factor (only show if enabled) */}
+              {params.enable_upscaling && (
+                <div>
+                  <label className="text-sm text-gray-400">Upscale Factor</label>
+                  <input
+                    type="range"
+                    min="1.0"
+                    max="2.5"
+                    step="0.1"
+                    value={params.upscale_factor}
+                    onChange={(e) => setParams({ ...params, upscale_factor: parseFloat(e.target.value) })}
+                    className="w-full mt-2"
+                  />
+                  <div className="text-right text-sm mt-1 text-white font-semibold">{params.upscale_factor}x</div>
+                  <p className="text-xs text-gray-500 mt-1">Higher = larger output (slower generation)</p>
+                </div>
+              )}
+
+              {/* Model Sampling Shift */}
+              <div>
+                <label className="text-sm text-gray-400">Model Sampling Shift</label>
+                <input
+                  type="range"
+                  min="1.0"
+                  max="4.0"
+                  step="0.1"
+                  value={params.model_sampling_shift}
+                  onChange={(e) => setParams({ ...params, model_sampling_shift: parseFloat(e.target.value) })}
+                  className="w-full mt-2"
+                />
+                <div className="text-right text-sm mt-1 text-white font-semibold">{params.model_sampling_shift}</div>
+                <p className="text-xs text-gray-500 mt-1">Higher = stronger style adherence (2.0 recommended)</p>
+              </div>
             </div>
 
             {/* Generate Button */}
@@ -353,7 +433,10 @@ function App() {
                   : 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600'
               }`}
             >
-              {isGenerating ? 'Generating... (~80s)' : 'Generate Image'}
+              {isGenerating
+                ? `Generating... (~${params.enable_upscaling ? '120' : '80'}s)`
+                : `Generate ${params.num_images > 1 ? params.num_images + ' Images' : 'Image'}`
+              }
             </button>
           </div>
 
@@ -371,8 +454,11 @@ function App() {
               {isGenerating && (
                 <div className="flex flex-col items-center justify-center h-96 bg-slate-900 rounded-lg">
                   <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-purple-500 mb-4"></div>
-                  <p className="text-gray-400">Generating your image...</p>
-                  <p className="text-sm text-gray-500 mt-2">This usually takes ~80 seconds</p>
+                  <p className="text-gray-400">Generating your {params.num_images > 1 ? 'images' : 'image'}...</p>
+                  <p className="text-sm text-gray-500 mt-2">
+                    This usually takes ~{params.enable_upscaling ? '120' : '80'} seconds
+                    {params.num_images > 1 && ` (${params.num_images} images)`}
+                  </p>
                 </div>
               )}
 

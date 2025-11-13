@@ -66,11 +66,15 @@ class GenerationRequest(BaseModel):
     init_image_base64: Optional[str] = None
     strength: float = 0.85
 
-    # Batch generation (future)
+    # Batch generation
     num_images: int = 1
 
-    # Upscaling (already in workflow)
+    # Upscaling (enable if > 1.0)
     upscale_factor: float = 1.5
+    enable_upscaling: bool = False
+
+    # Advanced: Model sampling shift (affects style adherence)
+    model_sampling_shift: float = 2.0
 
 class GenerationResponse(BaseModel):
     success: bool
@@ -255,8 +259,17 @@ async def generate(request: GenerationRequest):
             for node in workflow_ui["nodes"]:
                 if node.get("id") == 76:  # LoadImage node
                     node["widgets_values"][0] = uploaded_filename
+                    node["mode"] = 0  # Enable
                     print(f"   ✅ Updated LoadImage node with {uploaded_filename}")
                     break
+        else:
+            # No input image provided - create a blank/dummy image for the LoadImage node
+            # This prevents validation errors even though the node will be bypassed
+            print(f"   📝 No input image - workflow requires IMG2IMG. Please upload an image.")
+            return GenerationResponse(
+                success=False,
+                error="This workflow requires an input image. Please upload an image to use IMG2IMG generation."
+            )
 
         # 5. Update LoRA strength if different (node 74)
         if request.lora_strength != 0.8:
@@ -266,10 +279,81 @@ async def generate(request: GenerationRequest):
                     print(f"   ✅ Updated LoRA strength to {request.lora_strength}")
                     break
 
-        # 5b. Update KSampler parameters - DISABLED FOR NOW
-        # TODO: Need to properly map widget indices for this specific workflow
-        # The widget order varies by workflow, causing scheduler to get wrong value
-        # For now, sliders won't affect generation (workflow defaults will be used)
+        # 5b. Update KSampler parameters (node 3)
+        # Widget mapping for KSampler: [seed, control_after_generate, steps, cfg, sampler_name, scheduler, denoise]
+        for node in workflow_ui["nodes"]:
+            if node.get("id") == 3 and node.get("type") == "KSampler":
+                # Update seed (widget[0])
+                if request.seed is not None:
+                    node["widgets_values"][0] = request.seed
+                    print(f"   ✅ Updated seed to {request.seed}")
+
+                # Update steps (widget[2])
+                node["widgets_values"][2] = request.num_inference_steps
+                print(f"   ✅ Updated steps to {request.num_inference_steps}")
+
+                # Update CFG (widget[3])
+                node["widgets_values"][3] = request.guidance_scale
+                print(f"   ✅ Updated CFG to {request.guidance_scale}")
+
+                # Update denoise/strength (widget[6]) - only if not using IMG2IMG
+                if not request.init_image_base64:
+                    node["widgets_values"][6] = request.strength
+                    print(f"   ✅ Updated denoise to {request.strength}")
+
+                break
+
+        # 5c. Update dimensions and batch size (EmptySD3LatentImage node 58)
+        # Widget mapping: [width, height, batch_size]
+        for node in workflow_ui["nodes"]:
+            if node.get("id") == 58 and node.get("type") == "EmptySD3LatentImage":
+                node["widgets_values"][0] = request.width
+                node["widgets_values"][1] = request.height
+                node["widgets_values"][2] = request.num_images
+                print(f"   ✅ Updated dimensions to {request.width}x{request.height}, batch: {request.num_images}")
+                break
+
+        # 5d. Update model sampling shift (ModelSamplingAuraFlow node 66)
+        # Widget mapping: [shift]
+        for node in workflow_ui["nodes"]:
+            if node.get("id") == 66 and node.get("type") == "ModelSamplingAuraFlow":
+                node["widgets_values"][0] = request.model_sampling_shift
+                print(f"   ✅ Updated model sampling shift to {request.model_sampling_shift}")
+                break
+
+        # 5e. Enable/disable upscaling (LatentUpscaleBy node 78 + KSampler node 79)
+        # mode: 0 = enabled, 4 = disabled (bypassed)
+        if request.enable_upscaling:
+            # Enable upscaler node 78
+            for node in workflow_ui["nodes"]:
+                if node.get("id") == 78 and node.get("type") == "LatentUpscaleBy":
+                    node["mode"] = 0  # Enable
+                    node["widgets_values"][1] = request.upscale_factor
+                    print(f"   ✅ Enabled upscaling with factor {request.upscale_factor}")
+                    break
+
+            # Enable second KSampler node 79 for upscaling refinement
+            for node in workflow_ui["nodes"]:
+                if node.get("id") == 79 and node.get("type") == "KSampler":
+                    node["mode"] = 0  # Enable
+                    # Update its parameters too
+                    if request.seed is not None:
+                        node["widgets_values"][0] = request.seed + 1  # Different seed for upscale
+                    node["widgets_values"][2] = max(20, request.num_inference_steps // 2)  # Half steps
+                    node["widgets_values"][3] = request.guidance_scale * 0.5  # Lower CFG
+                    print(f"   ✅ Enabled upscale refinement pass")
+                    break
+        else:
+            # Disable upscaling nodes
+            for node in workflow_ui["nodes"]:
+                if node.get("id") == 78 and node.get("type") == "LatentUpscaleBy":
+                    node["mode"] = 4  # Bypass
+                    print(f"   ⏭️  Upscaling disabled")
+                    break
+            for node in workflow_ui["nodes"]:
+                if node.get("id") == 79 and node.get("type") == "KSampler":
+                    node["mode"] = 4  # Bypass
+                    break
 
         # 6. Convert workflow to API format
         print("🔄 Converting workflow to API format...")
@@ -427,7 +511,10 @@ async def generate(request: GenerationRequest):
                                 "lora_strength": request.lora_strength,
                                 "seed": request.seed,
                                 "strength": request.strength if request.init_image_base64 else None,
-                                "upscale_factor": request.upscale_factor
+                                "num_images": request.num_images,
+                                "upscale_enabled": request.enable_upscaling,
+                                "upscale_factor": request.upscale_factor if request.enable_upscaling else None,
+                                "model_sampling_shift": request.model_sampling_shift
                             },
                             "generation_time": total_time,
                             "has_input_image": request.init_image_base64 is not None
