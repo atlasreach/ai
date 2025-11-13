@@ -306,6 +306,43 @@
                     <input type="text" id="seed" value="-1" placeholder="-1">
                 </div>
 
+                <!-- IMG2IMG MODE -->
+                <div class="form-group" style="border-top: 2px solid #ddd; padding-top: 20px; margin-top: 20px;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="useImg2Img" onchange="toggleImg2ImgMode()" style="width: auto; margin-right: 10px;">
+                        <span>Use Reference Image as Base (IMG2IMG)</span>
+                    </label>
+                    <small style="color: #999; font-size: 12px;">When enabled, generation starts from uploaded image instead of noise</small>
+                </div>
+
+                <div id="img2imgControls" style="display: none;">
+                    <div class="slider-group">
+                        <div class="slider-label">
+                            <label>Denoise Strength (higher = more changes)</label>
+                            <span class="slider-value" id="strengthValue">0.85</span>
+                        </div>
+                        <input type="range" id="strength" min="0" max="1" step="0.05" value="0.85">
+                    </div>
+                </div>
+
+                <!-- BATCH GENERATION -->
+                <div class="slider-group" style="border-top: 2px solid #ddd; padding-top: 20px; margin-top: 20px;">
+                    <div class="slider-label">
+                        <label>Batch Size (generate multiple images)</label>
+                        <span class="slider-value" id="batchValue">1</span>
+                    </div>
+                    <input type="range" id="numImages" min="1" max="4" step="1" value="1">
+                </div>
+
+                <!-- UPSCALING -->
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <label>Upscale Factor</label>
+                        <span class="slider-value" id="upscaleValue">1.0x</span>
+                    </div>
+                    <input type="range" id="upscale" min="1" max="2" step="0.5" value="1">
+                </div>
+
                 <button class="button" id="generateBtn" onclick="generate()">Generate Image</button>
             </div>
 
@@ -336,6 +373,21 @@
         document.getElementById('height').oninput = function() {
             document.getElementById('heightValue').textContent = this.value;
         };
+        document.getElementById('strength').oninput = function() {
+            document.getElementById('strengthValue').textContent = this.value;
+        };
+        document.getElementById('numImages').oninput = function() {
+            document.getElementById('batchValue').textContent = this.value;
+        };
+        document.getElementById('upscale').oninput = function() {
+            document.getElementById('upscaleValue').textContent = this.value + 'x';
+        };
+
+        function toggleImg2ImgMode() {
+            const checkbox = document.getElementById('useImg2Img');
+            const controls = document.getElementById('img2imgControls');
+            controls.style.display = checkbox.checked ? 'block' : 'none';
+        }
 
         async function generate() {
             const btn = document.getElementById('generateBtn');
@@ -353,43 +405,91 @@
             const height = parseInt(document.getElementById('height').value);
             const seed = parseInt(document.getElementById('seed').value);
 
+            // NEW PARAMETERS
+            const useImg2Img = document.getElementById('useImg2Img').checked;
+            const strength = parseFloat(document.getElementById('strength').value);
+            const numImages = parseInt(document.getElementById('numImages').value);
+            const upscale = parseFloat(document.getElementById('upscale').value);
+
             // Validate
             if (!prompt.trim()) {
                 alert('Please enter a prompt');
                 return;
             }
 
+            // Get uploaded image for img2img if enabled
+            let initImageBase64 = null;
+            if (useImg2Img) {
+                const fileInput = document.getElementById('referenceImage');
+                if (!fileInput.files || !fileInput.files[0]) {
+                    alert('Please upload a reference image for IMG2IMG mode');
+                    return;
+                }
+
+                // Convert to base64
+                const file = fileInput.files[0];
+                const reader = new FileReader();
+                initImageBase64 = await new Promise((resolve) => {
+                    reader.onload = (e) => resolve(e.target.result.split(',')[1]);
+                    reader.readAsDataURL(file);
+                });
+            }
+
             // Show loading
             btn.disabled = true;
             btn.textContent = 'Generating...';
-            resultDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Generating your image...</p><p style="font-size: 14px; color: #999; margin-top: 10px;">This takes 60-90 seconds</p></div>';
+            const mode = useImg2Img ? 'IMG2IMG' : 'TEXT2IMG';
+            resultDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p>Generating ${numImages} image(s) (${mode})...</p><p style="font-size: 14px; color: #999; margin-top: 10px;">This takes 60-90 seconds per image</p></div>`;
 
             try {
+                const payload = {
+                    prompt,
+                    negative_prompt: negativePrompt,
+                    character,
+                    width,
+                    height,
+                    num_inference_steps: steps,
+                    guidance_scale: guidance,
+                    seed: seed === -1 ? null : seed,
+                    lora_strength: loraStrength,
+                    num_images: numImages,
+                    upscale_factor: upscale
+                };
+
+                // Add img2img params if enabled
+                if (useImg2Img && initImageBase64) {
+                    payload.init_image_base64 = initImageBase64;
+                    payload.strength = strength;
+                }
+
                 const response = await fetch(`${apiUrl}/generate`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        prompt,
-                        negative_prompt: negativePrompt,
-                        character,
-                        width,
-                        height,
-                        num_inference_steps: steps,
-                        guidance_scale: guidance,
-                        seed: seed === -1 ? null : seed,
-                        lora_strength: loraStrength
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
 
-                if (data.success && data.image_base64) {
-                    resultDiv.innerHTML = `
-                        <img src="data:image/png;base64,${data.image_base64}" alt="Generated image">
-                        <p style="margin-top: 15px; color: #999; font-size: 14px;">Generated in ${data.generation_time.toFixed(1)}s</p>
-                    `;
+                if (data.success && (data.image_base64 || data.images_base64)) {
+                    // Handle batch generation (multiple images)
+                    const images = data.images_base64 || [data.image_base64];
+
+                    let html = '';
+                    images.forEach((img, index) => {
+                        html += `
+                            <img src="data:image/png;base64,${img}" alt="Generated image ${index + 1}"
+                                 style="max-width: 100%; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
+                        `;
+                    });
+
+                    html += `<p style="margin-top: 15px; color: #999; font-size: 14px;">
+                        Generated ${images.length} image(s) in ${data.generation_time.toFixed(1)}s
+                        ${upscale > 1 ? `(${upscale}x upscaled)` : ''}
+                    </p>`;
+
+                    resultDiv.innerHTML = html;
                 } else {
                     resultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
                 }
