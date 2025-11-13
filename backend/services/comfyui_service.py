@@ -39,6 +39,50 @@ class ComfyUIService:
         with open(workflow_file, 'r') as f:
             return json.load(f)
 
+    def convert_workflow_to_api_format(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert workflow from JSON format to ComfyUI API format
+
+        ComfyUI API expects nodes as a dictionary keyed by node ID, not an array
+        """
+        api_workflow = {}
+
+        for node in workflow.get("nodes", []):
+            node_id = str(node["id"])
+            api_workflow[node_id] = {
+                "inputs": {},
+                "class_type": node["type"]
+            }
+
+            # Map widgets_values to inputs based on node type
+            if "widgets_values" in node and node["widgets_values"]:
+                api_workflow[node_id]["_meta"] = {
+                    "widgets_values": node["widgets_values"]
+                }
+
+        # Map links to inputs
+        for link in workflow.get("links", []):
+            # link format: [link_id, source_node, source_slot, target_node, target_slot, type]
+            if len(link) >= 5:
+                target_node_id = str(link[3])
+                if target_node_id in api_workflow:
+                    source_node_id = str(link[1])
+                    source_slot = link[2]
+                    target_input_name = self._get_input_name(workflow, target_node_id, link[4])
+
+                    if target_input_name:
+                        api_workflow[target_node_id]["inputs"][target_input_name] = [source_node_id, source_slot]
+
+        return api_workflow
+
+    def _get_input_name(self, workflow: Dict[str, Any], node_id: str, input_index: int) -> Optional[str]:
+        """Get input name from node definition"""
+        for node in workflow.get("nodes", []):
+            if str(node["id"]) == node_id and "inputs" in node:
+                if input_index < len(node["inputs"]):
+                    return node["inputs"][input_index].get("name")
+        return None
+
     def update_workflow(
         self,
         workflow: Dict[str, Any],
