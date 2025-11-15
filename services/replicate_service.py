@@ -77,24 +77,28 @@ class ReplicateService:
             return {
                 "success": False,
                 "error": str(e),
-                "model": model
+                "model": model_version.split(':')[0]
             }
 
     @staticmethod
-    async def generate_video(
-        image_url: str,
-        prompt: str = "",
+    async def generate_reel(
+        start_image_url: str,
+        prompt: str,
+        negative_prompt: str = "",
+        mode: str = "standard",
         duration: int = 5,
-        model: str = "kling-ai/kling-v1"
+        end_image_url: str = None
     ) -> Dict[str, Any]:
         """
-        Generate video from image using Kling AI
+        Generate video reel using Kling v2.1
 
         Args:
-            image_url: URL of input image
-            prompt: Optional motion prompt
+            start_image_url: First frame of the video (required for v2.1)
+            prompt: Text prompt for video generation
+            negative_prompt: Things you do not want to see
+            mode: "standard" (720p) or "pro" (1080p)
             duration: Video duration in seconds (default 5)
-            model: Replicate model to use
+            end_image_url: Optional last frame
 
         Returns:
             {
@@ -106,36 +110,46 @@ class ReplicateService:
             }
         """
         try:
-            print(f"🎬 Starting video generation with {model}")
-            print(f"   Image: {image_url[:60]}...")
+            print(f"🎬 Starting reel generation with Kling v2.1")
+            print(f"   Mode: {mode}")
+            print(f"   Start image: {start_image_url[:60]}...")
+            print(f"   Prompt: {prompt[:100]}...")
             print(f"   Duration: {duration}s")
 
-            # Note: Video generation takes 5-10 minutes
-            # We'll return the prediction ID and let the client poll
+            input_params = {
+                "start_image": start_image_url,
+                "prompt": prompt,
+                "mode": mode,
+                "duration": duration
+            }
+
+            if negative_prompt:
+                input_params["negative_prompt"] = negative_prompt
+
+            if end_image_url:
+                input_params["end_image"] = end_image_url
+
+            # Start async prediction (returns immediately)
             prediction = replicate.predictions.create(
-                version=model,
-                input={
-                    "image": image_url,
-                    "prompt": prompt,
-                    "duration": duration
-                }
+                version="kwaivgi/kling-v2.1",
+                input=input_params
             )
 
-            print(f"   ✅ Video generation started: {prediction.id}")
+            print(f"   ✅ Reel generation started (async)")
+            print(f"   Prediction ID: {prediction.id}")
+            print(f"   Status: {prediction.status}")
 
             return {
                 "success": True,
                 "prediction_id": prediction.id,
-                "status": prediction.status,
-                "model": model
+                "status": prediction.status
             }
 
         except Exception as e:
-            print(f"   ❌ Video generation failed: {e}")
+            print(f"   ❌ Reel generation failed: {e}")
             return {
                 "success": False,
-                "error": str(e),
-                "model": model
+                "error": str(e)
             }
 
     @staticmethod

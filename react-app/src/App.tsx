@@ -1,7 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
-import Studio from './pages/Studio'
-import Library from './pages/Library'
 import Models from './pages/Models'
+import Tools from './pages/Tools'
+import Generations from './pages/Generations'
+import DatasetCreator from './pages/DatasetCreator'
 import './App.css'
 
 function Navigation() {
@@ -15,7 +16,7 @@ function Navigation() {
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center space-x-8">
             <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              Content Studio
+              AI Studio
             </h1>
 
             <div className="flex space-x-1">
@@ -27,27 +28,37 @@ function Navigation() {
                     : 'text-gray-400 hover:text-white hover:bg-slate-700'
                 }`}
               >
-                🎨 Studio
-              </Link>
-              <Link
-                to="/library"
-                className={`px-4 py-2 rounded-lg transition-all ${
-                  isActive('/library')
-                    ? 'bg-purple-600 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
-                }`}
-              >
-                📚 Library
-              </Link>
-              <Link
-                to="/models"
-                className={`px-4 py-2 rounded-lg transition-all ${
-                  isActive('/models')
-                    ? 'bg-purple-600 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
-                }`}
-              >
                 👤 Models
+              </Link>
+              <Link
+                to="/tools"
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  isActive('/tools')
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
+                }`}
+              >
+                🛠️ Tools
+              </Link>
+              <Link
+                to="/generations"
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  isActive('/generations')
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
+                }`}
+              >
+                ✨ Generations
+              </Link>
+              <Link
+                to="/dataset-creator"
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  isActive('/dataset-creator')
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
+                }`}
+              >
+                📦 Dataset Creator
               </Link>
             </div>
           </div>
@@ -71,9 +82,10 @@ function App() {
 
         <main className="max-w-7xl mx-auto px-8 py-8">
           <Routes>
-            <Route path="/" element={<Studio />} />
-            <Route path="/library" element={<Library />} />
-            <Route path="/models" element={<Models />} />
+            <Route path="/" element={<Models />} />
+            <Route path="/tools" element={<Tools />} />
+            <Route path="/generations" element={<Generations />} />
+            <Route path="/dataset-creator" element={<DatasetCreator />} />
           </Routes>
         </main>
       </div>

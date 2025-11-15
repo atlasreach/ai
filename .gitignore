@@ -25,7 +25,13 @@ dist/
 # Temporary files
 *.tmp
 *.log
+*.db
 .DS_Store
+
+# Generated outputs (may want to commit some, ignore most)
+outputs/*/
+generated_samples/
+!generated_samples/.gitkeep
 
 # Old project files (if needed)
 models/*/results/
