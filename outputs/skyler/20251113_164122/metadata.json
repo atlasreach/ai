@@ -1,0 +1,21 @@
+{
+  "model": "skyler",
+  "timestamp": "20251113_164122",
+  "prompt": "skyler, woman with long light brown hair with pink highlights, fair skin, wearing a black bikini top and a pink thong with silver and rhinestone embellishments, lying on her stomach on a white couch facing the camera with her butt raised, left hand resting on the couch, right hand not visible, playful expression with tongue sticking out, bright natural lighting from a window in the background",
+  "negative_prompt": "blurry, low quality, distorted, deformed, disfigured",
+  "parameters": {
+    "width": 1024,
+    "height": 768,
+    "steps": 30,
+    "cfg_scale": 4.0,
+    "lora_strength": 0.8,
+    "seed": null,
+    "strength": 0.85,
+    "num_images": 1,
+    "upscale_enabled": true,
+    "upscale_factor": 1.5,
+    "model_sampling_shift": 2.0
+  },
+  "generation_time": 42.2524516582489,
+  "has_input_image": true
+}
