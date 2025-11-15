@@ -53,6 +53,12 @@ interface Dataset {
   description?: string;
   image_count: number;
   created_at: string;
+  dataset_constraints?: {
+    rules: Array<{
+      key: string;
+      value: string;
+    }>;
+  };
 }
 
 interface TrainingImage {
@@ -65,7 +71,6 @@ interface TrainingImage {
 export default function DatasetCreator() {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [currentStep, setCurrentStep] = useState<'select' | 'constraints' | 'dataset' | 'upload' | 'captions'>('select');
 
   // New character creation
@@ -75,7 +80,6 @@ export default function DatasetCreator() {
 
   // Constraint editing with presets
   const [editingConstraints, setEditingConstraints] = useState<Array<{ key: string; value: string; type: string }>>([]);
-  const [selectedPreset, setSelectedPreset] = useState('');
   const [customConstraintKey, setCustomConstraintKey] = useState('');
   const [customConstraintValue, setCustomConstraintValue] = useState('');
 
@@ -87,12 +91,10 @@ export default function DatasetCreator() {
 
   // Image upload
   const [uploadedImages, setUploadedImages] = useState<File[]>([]);
-  const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Caption generation
+  // Caption review
   const [images, setImages] = useState<TrainingImage[]>([]);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [captionFormat, setCaptionFormat] = useState('');
   const [editingCaptionId, setEditingCaptionId] = useState<string | null>(null);
   const [editingCaptionText, setEditingCaptionText] = useState('');
@@ -103,7 +105,6 @@ export default function DatasetCreator() {
 
   useEffect(() => {
     if (selectedCharacter) {
-      loadCharacterDatasets(selectedCharacter.id);
       setEditingConstraints(selectedCharacter.character_constraints?.constants || []);
     }
   }, [selectedCharacter]);
@@ -116,22 +117,6 @@ export default function DatasetCreator() {
 
     if (data && !error) {
       setCharacters(data);
-    }
-  };
-
-  const loadCharacterDatasets = async (characterId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('training_datasets')
-        .select('*')
-        .eq('character_id', characterId)
-        .order('created_at', { ascending: false });
-
-      if (data && !error) {
-        setDatasets(data);
-      }
-    } catch (error) {
-      console.error('Error loading datasets:', error);
     }
   };
 
@@ -210,7 +195,6 @@ export default function DatasetCreator() {
       if (data && !error) {
         setSelectedCharacter(data);
         setEditingConstraints(data.character_constraints?.constants || []);
-        setSelectedPreset('');
       }
     } catch (error) {
       console.error('Error adding constraint:', error);
@@ -370,111 +354,23 @@ export default function DatasetCreator() {
       return;
     }
 
-    console.log('📤 Starting upload:', { imageCount: uploadedImages.length, datasetId: currentDataset.id });
+    console.log('📤 Starting upload with auto-captions:', { imageCount: uploadedImages.length, datasetId: currentDataset.id });
     setIsUploading(true);
-    const urls: string[] = [];
-    const errors: string[] = [];
 
     try {
-      for (let i = 0; i < uploadedImages.length; i++) {
-        const file = uploadedImages[i];
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${currentDataset.id}/${Date.now()}_${i}.${fileExt}`;
+      // Create FormData with all images
+      const formData = new FormData();
+      uploadedImages.forEach(file => {
+        formData.append('files', file);
+      });
 
-        console.log(`📸 Uploading image ${i + 1}/${uploadedImages.length}: ${fileName}`);
-
-        // Upload to Supabase Storage
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('training-images')
-          .upload(fileName, file, {
-            cacheControl: '3600',
-            upsert: false
-          });
-
-        console.log(`Response for ${fileName}:`, { uploadData, uploadError });
-
-        if (uploadError) {
-          console.error(`❌ Upload error for ${fileName}:`, uploadError);
-          errors.push(`${file.name}: ${uploadError.message}`);
-          continue;
-        }
-
-        if (uploadData) {
-          // Get public URL
-          const { data: { publicUrl } } = supabase.storage
-            .from('training-images')
-            .getPublicUrl(fileName);
-
-          console.log(`✅ Uploaded successfully, URL: ${publicUrl}`);
-          urls.push(publicUrl);
-
-          // Insert into training_images table
-          const { error: dbError } = await supabase
-            .from('training_images')
-            .insert([{
-              id: crypto.randomUUID(),
-              dataset_id: currentDataset.id,
-              image_url: publicUrl,
-              caption: '', // Will be generated later
-              display_order: i
-            }]);
-
-          if (dbError) {
-            console.error('❌ Database insert error:', dbError);
-          }
-        }
-      }
-
-      console.log(`✅ Upload complete: ${urls.length} successful, ${errors.length} failed`);
-
-      if (errors.length > 0) {
-        alert(`Upload completed with errors:\n${errors.join('\n')}`);
-      }
-
-      setUploadedImageUrls(urls);
-
-      // Update dataset image count
-      await supabase
-        .from('training_datasets')
-        .update({ image_count: urls.length })
-        .eq('id', currentDataset.id);
-
-      if (urls.length > 0) {
-        setCurrentStep('captions');
-      } else {
-        alert('No images were uploaded successfully. Please check console for errors.');
-      }
-    } catch (error) {
-      console.error('❌ Exception uploading images:', error);
-      alert(`Error: ${error}`);
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const generateCaptions = async () => {
-    console.log('🤖 Generate captions called', { currentDataset, imageCount: uploadedImageUrls.length });
-
-    if (!currentDataset || !uploadedImageUrls.length) {
-      console.log('❌ Missing dataset or images');
-      alert('No dataset or images to caption');
-      return;
-    }
-
-    console.log(`📤 Sending ${uploadedImageUrls.length} images to backend for captioning...`);
-    setIsGenerating(true);
-
-    try {
-      const url = `${API_BASE}/api/datasets/${currentDataset.id}/generate-captions-batch`;
+      // Call new endpoint that uploads + auto-generates captions
+      const url = `${API_BASE}/api/datasets/${currentDataset.id}/upload-images`;
       console.log(`🌐 Calling: ${url}`);
 
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dataset_id: currentDataset.id,
-          image_urls: uploadedImageUrls
-        })
+        body: formData
       });
 
       console.log(`📥 Response status: ${response.status}`);
@@ -482,7 +378,7 @@ export default function DatasetCreator() {
       if (!response.ok) {
         const errorText = await response.text();
         console.error('❌ API error:', errorText);
-        alert(`API error: ${response.status} - ${errorText}`);
+        alert(`Upload failed: ${response.status} - ${errorText}`);
         return;
       }
 
@@ -490,18 +386,28 @@ export default function DatasetCreator() {
       console.log('📥 Response data:', data);
 
       if (data.success) {
-        console.log(`✅ Captions generated! ${data.succeeded}/${data.total} successful`);
-        alert(`Generated ${data.succeeded}/${data.total} captions successfully!`);
-        loadDatasetImages(currentDataset.id);
+        console.log(`✅ Uploaded ${data.succeeded}/${data.total} images with auto-generated captions!`);
+
+        if (data.failed > 0) {
+          alert(`Uploaded ${data.succeeded}/${data.total} images successfully.\n${data.failed} failed - check console for details.`);
+        } else {
+          alert(`✅ Successfully uploaded ${data.succeeded} images with AI-generated captions!`);
+        }
+
+        // Load images to display in captions view
+        await loadDatasetImages(currentDataset.id);
+
+        // Move to captions step to review
+        setCurrentStep('captions');
       } else {
-        console.error('❌ Caption generation failed:', data);
-        alert('Caption generation failed - check console');
+        console.error('❌ Upload failed:', data);
+        alert('Upload failed - check console');
       }
     } catch (error) {
-      console.error('❌ Exception generating captions:', error);
+      console.error('❌ Exception uploading images:', error);
       alert(`Error: ${error}`);
     } finally {
-      setIsGenerating(false);
+      setIsUploading(false);
     }
   };
 
@@ -561,7 +467,7 @@ export default function DatasetCreator() {
         {/* Progress Bar */}
         <div className="mb-8">
           <div className="flex items-center justify-between mb-3">
-            {['Select Character', 'Define Traits', 'Create Dataset', 'Upload Images', 'Generate Captions'].map((label, idx) => {
+            {['Select Character', 'Define Traits', 'Create Dataset', 'Upload & Caption', 'Review Captions'].map((label, idx) => {
               const steps = ['select', 'constraints', 'dataset', 'upload', 'captions'];
               const currentIdx = steps.indexOf(currentStep);
               const isActive = idx === currentIdx;
@@ -624,21 +530,26 @@ export default function DatasetCreator() {
                     <input
                       type="text"
                       value={newCharacterName}
-                      onChange={(e) => setNewCharacterName(e.target.value)}
-                      placeholder="e.g., SeaDream"
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        setNewCharacterName(name);
+                        // Auto-populate trigger word: lowercase, remove spaces
+                        setNewCharacterTrigger(name.toLowerCase().replace(/\s+/g, ''));
+                      }}
+                      placeholder="e.g., Milan"
                       className="w-full bg-slate-800 p-3 rounded-lg border border-gray-700 focus:border-purple-500 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm mb-2 text-gray-300">Trigger Word</label>
+                    <label className="block text-sm mb-2 text-gray-300">Trigger Word (auto-generated)</label>
                     <input
                       type="text"
                       value={newCharacterTrigger}
                       onChange={(e) => setNewCharacterTrigger(e.target.value)}
-                      placeholder="e.g., seadream (lowercase, no spaces)"
+                      placeholder="e.g., milan"
                       className="w-full bg-slate-800 p-3 rounded-lg border border-gray-700 focus:border-purple-500 focus:outline-none"
                     />
-                    <p className="text-xs text-gray-500 mt-1">This word will be the first word in all captions</p>
+                    <p className="text-xs text-gray-500 mt-1">Auto-generated from name, but you can edit it</p>
                   </div>
                   <div className="flex gap-3">
                     <button
@@ -801,9 +712,12 @@ export default function DatasetCreator() {
                   type="text"
                   value={datasetName}
                   onChange={(e) => setDatasetName(e.target.value)}
-                  placeholder={`${selectedCharacter.id}_${datasetType.toLowerCase()}_v1`}
+                  placeholder={`${selectedCharacter.name}_${datasetType}`}
                   className="w-full bg-slate-800 p-4 rounded-lg border border-gray-700 focus:border-purple-500 focus:outline-none text-lg"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Suggested: {selectedCharacter.name}_{datasetType} or {selectedCharacter.name}_Beach or {selectedCharacter.name}_Studio
+                </p>
               </div>
 
               <div>
@@ -908,7 +822,7 @@ export default function DatasetCreator() {
                   disabled={isUploading}
                   className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-xl font-bold text-lg transition shadow-lg disabled:opacity-50"
                 >
-                  {isUploading ? 'Uploading...' : `Upload ${uploadedImages.length} Images & Continue →`}
+                  {isUploading ? '✨ Uploading & Generating AI Captions...' : `🚀 Upload ${uploadedImages.length} Images & Auto-Generate Captions`}
                 </button>
               </div>
             )}
@@ -917,19 +831,13 @@ export default function DatasetCreator() {
 
         {currentStep === 'captions' && currentDataset && (
           <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-8 border border-purple-500/20 shadow-2xl">
-            <h2 className="text-3xl font-bold mb-6">Generate & Review Captions</h2>
+            <h2 className="text-3xl font-bold mb-6">Review & Edit Captions</h2>
 
-            {uploadedImageUrls.length > 0 && images.length === 0 && (
+            {images.length === 0 && (
               <div className="text-center py-12">
-                <div className="text-6xl mb-4">🤖</div>
-                <button
-                  onClick={generateCaptions}
-                  disabled={isGenerating}
-                  className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 rounded-xl font-bold text-lg transition shadow-lg disabled:opacity-50"
-                >
-                  {isGenerating ? '✨ Generating captions with Grok AI...' : 'Generate Captions with AI'}
-                </button>
-                <p className="text-gray-400 mt-4">This may take a few minutes...</p>
+                <div className="text-6xl mb-4">⏳</div>
+                <p className="text-xl font-semibold text-gray-300">Loading images...</p>
+                <p className="text-gray-400 mt-2">Captions were auto-generated during upload</p>
               </div>
             )}
 
@@ -985,22 +893,27 @@ export default function DatasetCreator() {
                 ))}
 
                 <div className="mt-8 p-6 bg-gradient-to-br from-green-900/40 to-emerald-900/40 rounded-xl border border-green-500/30">
-                  <div className="flex items-center gap-3 mb-4">
+                  <div className="flex items-center gap-3 mb-6">
                     <div className="text-4xl">✅</div>
                     <div>
                       <div className="font-bold text-xl">Dataset Ready!</div>
                       <div className="text-sm text-gray-300">{images.length} images with AI-generated captions</div>
                     </div>
                   </div>
-                  <div className="text-sm text-gray-300 space-y-2">
-                    <p className="font-semibold">Next Steps:</p>
-                    <ol className="list-decimal list-inside space-y-1 ml-2">
-                      <li>Download dataset as ZIP (feature coming soon)</li>
-                      <li>Upload to AI Toolkit / Kohya / Allura</li>
-                      <li>Train LoRA model (recommended: 2000-3000 steps)</li>
-                      <li>Upload .safetensors file to your ComfyUI loras/ folder</li>
-                      <li>Use ComfyUI integration to generate!</li>
-                    </ol>
+
+                  <button
+                    onClick={() => window.location.href = '/training'}
+                    className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-xl font-bold text-lg transition shadow-lg"
+                  >
+                    🚀 Go to Training Dashboard
+                  </button>
+
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <p className="font-semibold">Or manually:</p>
+                    <ul className="list-disc list-inside space-y-1 ml-2">
+                      <li>Download dataset as ZIP</li>
+                      <li>Train with AI Toolkit / Kohya</li>
+                    </ul>
                   </div>
                 </div>
               </div>

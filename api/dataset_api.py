@@ -14,10 +14,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.dataset_service import DatasetService
 from services.grok_service import GrokService
 import base64
+from supabase import create_client
+from dotenv import load_dotenv
+import time
+
+load_dotenv()
 
 # Initialize services
 dataset_service = DatasetService()
 grok_service = GrokService()
+
+# Initialize Supabase
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Create router
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -232,6 +242,146 @@ async def delete_training_image(image_id: str):
     return {
         "success": True,
         "message": "Image deleted"
+    }
+
+@router.post("/{dataset_id}/upload-images")
+async def upload_training_images(
+    dataset_id: str,
+    files: List[UploadFile] = File(...)
+):
+    """
+    Upload multiple images and auto-generate captions
+
+    This endpoint:
+    1. Uploads images to Supabase Storage
+    2. Automatically generates captions with Grok AI
+    3. Adds images + captions to training_images table
+
+    Returns list of uploaded images with their captions
+    """
+    # Validate dataset exists
+    dataset = dataset_service.get_dataset(dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Get character for caption generation
+    character = dataset_service.get_character_with_constraints(dataset['character_id'])
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    # Build Grok prompt once for all images
+    grok_prompt = dataset_service.build_grok_prompt(character, dataset)
+
+    results = []
+    current_image_count = dataset.get('image_count', 0)
+
+    for i, file in enumerate(files):
+        try:
+            # Read file content
+            file_content = await file.read()
+
+            # Generate unique filename
+            timestamp = int(time.time() * 1000)
+            file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+            storage_filename = f"{dataset_id}/{timestamp}_{i}.{file_extension}"
+
+            # Upload to Supabase Storage
+            storage_response = supabase.storage.from_('training-images').upload(
+                storage_filename,
+                file_content,
+                {'content-type': file.content_type or 'image/jpeg'}
+            )
+
+            # Get public URL
+            public_url = supabase.storage.from_('training-images').get_public_url(storage_filename)
+
+            # Auto-generate caption with Grok
+            try:
+                caption = await grok_service.generate_caption_from_url(public_url, grok_prompt)
+            except Exception as caption_error:
+                # If caption generation fails, use trigger word as fallback
+                caption = character['trigger_word']
+                print(f"⚠️ Caption generation failed for {file.filename}: {caption_error}")
+
+            # Add to training_images table
+            image_id = dataset_service.add_training_image(
+                dataset_id,
+                public_url,
+                caption,
+                metadata={'original_filename': file.filename, 'storage_path': storage_filename},
+                display_order=current_image_count + i
+            )
+
+            results.append({
+                "success": True,
+                "image_id": image_id,
+                "image_url": public_url,
+                "caption": caption,
+                "filename": file.filename
+            })
+
+        except Exception as e:
+            results.append({
+                "success": False,
+                "filename": file.filename,
+                "error": str(e)
+            })
+
+    # Count successes
+    succeeded = sum(1 for r in results if r.get("success"))
+    failed = len(results) - succeeded
+
+    # Generate 5 validation prompts based on captions
+    if succeeded > 0:
+        try:
+            # Get all captions from successful uploads
+            captions = [r['caption'] for r in results if r.get("success")]
+
+            # Create prompt for Grok to generate validation prompts
+            validation_prompt = f"""Based on these image captions from a training dataset, generate 5 diverse validation prompts to test the trained LoRA model. Each prompt should use the trigger word '{character['trigger_word']}' and test different scenarios/styles.
+
+Training captions:
+{chr(10).join(f'- {c}' for c in captions[:10])}
+
+Generate 5 validation prompts as a JSON array. Each prompt should be creative and test different aspects (poses, lighting, settings, styles, etc.).
+
+Format: ["prompt 1", "prompt 2", "prompt 3", "prompt 4", "prompt 5"]"""
+
+            validation_prompts_json = await grok_service.generate_text_completion(
+                validation_prompt
+            )
+
+            # Try to parse JSON, fallback to default prompts if fails
+            import json
+            try:
+                validation_prompts = json.loads(validation_prompts_json)
+            except:
+                # Fallback to simple prompts if JSON parsing fails
+                trigger = character['trigger_word']
+                validation_prompts = [
+                    f"{trigger}, professional portrait, studio lighting",
+                    f"{trigger}, casual photo, outdoor setting, natural light",
+                    f"{trigger}, creative composition, artistic style",
+                    f"{trigger}, close-up shot, detailed",
+                    f"{trigger}, full body photo, dynamic pose"
+                ]
+
+            # Store validation prompts in dataset
+            dataset_service.update_dataset(dataset_id, {
+                'validation_prompts': validation_prompts
+            })
+
+            print(f"✅ Generated {len(validation_prompts)} validation prompts for dataset {dataset_id}")
+        except Exception as e:
+            print(f"⚠️ Failed to generate validation prompts: {e}")
+
+    return {
+        "success": True,
+        "results": results,
+        "total": len(files),
+        "succeeded": succeeded,
+        "failed": failed,
+        "message": f"Uploaded {succeeded}/{len(files)} images with auto-generated captions"
     }
 
 # ============================================================================

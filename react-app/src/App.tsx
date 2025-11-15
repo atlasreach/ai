@@ -3,6 +3,7 @@ import Models from './pages/Models'
 import Tools from './pages/Tools'
 import Generations from './pages/Generations'
 import DatasetCreator from './pages/DatasetCreator'
+import Training from './pages/Training'
 import './App.css'
 
 function Navigation() {
@@ -60,6 +61,16 @@ function Navigation() {
               >
                 📦 Dataset Creator
               </Link>
+              <Link
+                to="/training"
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  isActive('/training')
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
+                }`}
+              >
+                🚀 Training
+              </Link>
             </div>
           </div>
 
@@ -86,6 +97,7 @@ function App() {
             <Route path="/tools" element={<Tools />} />
             <Route path="/generations" element={<Generations />} />
             <Route path="/dataset-creator" element={<DatasetCreator />} />
+            <Route path="/training" element={<Training />} />
           </Routes>
         </main>
       </div>

@@ -152,3 +152,44 @@ Respond ONLY with JSON in this format:
         except Exception as e:
             print(f"Error generating caption with Grok: {e}")
             raise
+
+    @staticmethod
+    async def generate_text_completion(prompt: str) -> str:
+        """
+        Generate text completion without image (for validation prompts, etc)
+
+        Args:
+            prompt: Text prompt to complete
+
+        Returns:
+            Generated text response
+        """
+        try:
+            response = requests.post(
+                GROK_API_URL,
+                headers={
+                    "Authorization": f"Bearer {GROK_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "grok-2-1212",  # Use text-only model
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 500
+                },
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"Grok API error: {response.text}")
+
+            result = response.json()
+            completion = result['choices'][0]['message']['content'].strip()
+
+            return completion
+
+        except Exception as e:
+            print(f"Error generating text with Grok: {e}")
+            raise

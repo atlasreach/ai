@@ -19,6 +19,7 @@ class StartTrainingRequest(BaseModel):
     rank: int = 16  # 16 or 32
     steps: int = 2000
     lr: float = 0.0002
+    save_every_n_steps: int = 500
 
 
 class TrainingStatusResponse(BaseModel):
@@ -58,7 +59,8 @@ async def start_training(request: StartTrainingRequest):
             'gpu_type': request.gpu_type,
             'rank': request.rank,
             'steps': request.steps,
-            'lr': request.lr
+            'lr': request.lr,
+            'save_every_n_steps': request.save_every_n_steps
         }
 
         job_id = TrainingService.start_training_job(
@@ -92,6 +94,65 @@ async def get_training_status(job_id: str):
     try:
         status_data = TrainingService.check_training_status(job_id)
 
+        # Auto-upload to HuggingFace when training completes
+        if status_data.get('status') == 'completed':
+            from supabase import create_client
+            from dotenv import load_dotenv
+            import threading
+
+            load_dotenv()
+            supabase = create_client(
+                os.getenv('SUPABASE_URL'),
+                os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+            )
+
+            # Get dataset from job_id
+            dataset = supabase.table('training_datasets').select('*').eq('runpod_job_id', job_id).single().execute()
+
+            if dataset.data:
+                dataset_id = dataset.data['id']
+                hf_url = dataset.data.get('huggingface_url')
+                training_status = dataset.data.get('training_status')
+
+                # Only trigger upload if not already uploaded or uploading
+                if not hf_url and training_status not in ['uploading', 'uploaded']:
+                    # Update status to uploading
+                    supabase.table('training_datasets').update({
+                        'training_status': 'uploading'
+                    }).eq('id', dataset_id).execute()
+
+                    # Trigger upload in background thread
+                    def upload_in_background():
+                        try:
+                            result = TrainingService.download_lora(dataset_id)
+
+                            # After successful upload, generate validation images
+                            if result and result.get('checkpoints'):
+                                print(f"🖼️  Starting validation image generation for {len(result['checkpoints'])} checkpoints...")
+
+                                # Generate validation images in async context
+                                import asyncio
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+
+                                try:
+                                    validation_images = loop.run_until_complete(
+                                        TrainingService.generate_validation_images(dataset_id, result['checkpoints'])
+                                    )
+                                    print(f"✅ Generated {len(validation_images)} validation images")
+                                finally:
+                                    loop.close()
+
+                        except Exception as e:
+                            print(f"❌ Auto-upload failed: {e}")
+
+                    thread = threading.Thread(target=upload_in_background)
+                    thread.daemon = True
+                    thread.start()
+
+                    status_data['status'] = 'uploading'
+                    status_data['message'] = 'Training complete, uploading to HuggingFace...'
+
         return {
             "success": True,
             **status_data
@@ -109,36 +170,19 @@ async def download_lora(dataset_id: str):
     Returns:
     {
         "success": true,
-        "lora_url": "https://...",
-        "huggingface_url": "https://huggingface.co/..."
+        "huggingface_url": "https://huggingface.co/...",
+        "lora_download_url": "https://...",
+        "file_size_mb": 317.5,
+        "filename": "character-name-lora.safetensors",
+        "repo_id": "nicksanford2341/character-name-lora"
     }
     """
     try:
-        # Get job_id from dataset
-        from supabase import create_client
-        import os
-        from dotenv import load_dotenv
-
-        load_dotenv()
-        supabase = create_client(
-            os.getenv('SUPABASE_URL'),
-            os.getenv('SUPABASE_SERVICE_ROLE_KEY')
-        )
-
-        dataset = supabase.table('training_datasets').select('*').eq('id', dataset_id).single().execute()
-
-        if not dataset.data:
-            raise HTTPException(status_code=404, detail="Dataset not found")
-
-        job_id = dataset.data.get('runpod_job_id')
-        if not job_id:
-            raise HTTPException(status_code=400, detail="No training job found for this dataset")
-
-        huggingface_url = TrainingService.download_lora(job_id, dataset_id)
+        result = TrainingService.download_lora(dataset_id)
 
         return {
             "success": True,
-            "huggingface_url": huggingface_url,
+            **result,
             "message": "LoRA downloaded and uploaded to Hugging Face"
         }
 

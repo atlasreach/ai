@@ -238,6 +238,45 @@ class ComfyUIService:
         if changes:
             print("   ✓ Sampler overrides:", ", ".join(changes))
 
+    def is_edit_workflow(self, prompt: Dict[str, Any]) -> bool:
+        """Check if this is a Qwen Edit workflow by looking for TextEncodeQwenImageEdit node."""
+        for node_id, node in prompt.items():
+            if node.get("class_type") == "TextEncodeQwenImageEdit":
+                return True
+        return False
+
+    def api_inject_edit_prompt(
+        self,
+        prompt: Dict[str, Any],
+        edit_instruction: str,
+        negative: str = "",
+        edit_node_id: str = "20",
+        negative_node_id: str = "30",
+    ) -> None:
+        """
+        Inject edit instruction into TextEncodeQwenImageEdit node (Edit workflows).
+
+        Edit workflow uses:
+        - Node 20: TextEncodeQwenImageEdit (edit instruction)
+        - Node 30: CLIPTextEncode (negative prompt)
+        """
+        # Edit instruction node
+        edit_node = prompt.get(edit_node_id)
+        if edit_node and edit_node.get("class_type") == "TextEncodeQwenImageEdit":
+            inputs = edit_node.setdefault("inputs", {})
+            inputs["prompt"] = edit_instruction
+            print(f"   ✓ Injected edit instruction: {edit_instruction[:60]}...")
+        else:
+            print(f"   ⚠ TextEncodeQwenImageEdit node {edit_node_id} not found")
+
+        # Negative prompt node
+        neg_node = prompt.get(negative_node_id)
+        if neg_node and neg_node.get("class_type") == "CLIPTextEncode":
+            inputs = neg_node.setdefault("inputs", {})
+            inputs["text"] = negative
+            if negative:
+                print(f"   ✓ Injected negative prompt: {negative[:60]}...")
+
     # -------------------------------------------------------------------------
     # 4. ComfyUI API calls
     # -------------------------------------------------------------------------
@@ -394,32 +433,50 @@ class ComfyUIService:
             # 1. Load API-format prompt (exactly what the UI uses)
             prompt = self.load_api_prompt(workflow_path)
 
-            # 2. Inject LoRA
+            # 2. Detect workflow type
+            is_edit = self.is_edit_workflow(prompt)
+            if is_edit:
+                print("   📝 Detected Edit workflow")
+
+            # 3. Inject LoRA (different node IDs for edit vs generation)
             if lora_file := character.get("lora_file"):
                 lora_strength = (
                     lora_strength_override
                     if lora_strength_override is not None
                     else character.get("lora_strength", 0.8)
                 )
-                self.api_inject_lora(prompt, lora_file, lora_strength)
+                lora_node_id = "12" if is_edit else "74"
+                self.api_inject_lora(prompt, lora_file, lora_strength, lora_node_id)
 
-            # 3. Build positive/negative prompts and inject
-            positive_prompt = self.build_prompt_from_character(
-                character, prompt_additions
-            )
-            negative_prompt = (
-                "blurry, low quality, distorted, deformed, disfigured"
-            )
-            self.api_inject_prompts(prompt, positive_prompt, negative_prompt)
+            # 4. Build and inject prompts (different method for edit)
+            negative_prompt = "different positioning in image" if is_edit else "blurry, low quality, distorted, deformed, disfigured"
 
-            # 4. Inject or switch image latent
-            self.api_inject_input_image(prompt, input_image_filename)
+            if is_edit:
+                # Edit workflow: just use the edit instruction directly
+                edit_instruction = prompt_additions
+                self.api_inject_edit_prompt(prompt, edit_instruction, negative_prompt)
+            else:
+                # Generation workflow: build full prompt with character info
+                positive_prompt = self.build_prompt_from_character(
+                    character, prompt_additions
+                )
+                self.api_inject_prompts(prompt, positive_prompt, negative_prompt)
 
-            # 5. Apply sampler overrides (steps, cfg, etc.) if provided
+            # 5. Inject input image (different node IDs for edit)
+            if is_edit:
+                load_image_node_id = "21"
+                # Edit workflow doesn't switch latent, always uses image
+                if input_image_filename:
+                    self.api_inject_input_image(prompt, input_image_filename, load_image_node_id=load_image_node_id)
+            else:
+                self.api_inject_input_image(prompt, input_image_filename)
+
+            # 6. Apply sampler overrides (different KSampler node for edit)
             if sampler_overrides:
-                self.api_apply_sampler_overrides(prompt, sampler_overrides)
+                ksampler_node_id = "31" if is_edit else "3"
+                self.api_apply_sampler_overrides(prompt, sampler_overrides, ksampler_node_id)
 
-            # 6. Submit to ComfyUI
+            # 7. Submit to ComfyUI
             print("   📤 Submitting to ComfyUI...")
             submit_result = await self.submit_prompt(prompt)
             if not submit_result["success"]:
@@ -428,12 +485,12 @@ class ComfyUIService:
             prompt_id = submit_result["prompt_id"]
             print(f"   ✓ Submitted (prompt_id: {prompt_id[:8]}...)")
 
-            # 7. Poll for completion
+            # 8. Poll for completion
             poll_result = await self.poll_for_completion(prompt_id)
             if not poll_result["success"]:
                 return poll_result
 
-            # 8. Build output URLs
+            # 9. Build output URLs
             output_images = poll_result["output_images"]
             output_urls = [self.get_image_url(img) for img in output_images]
 

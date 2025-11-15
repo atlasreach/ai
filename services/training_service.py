@@ -29,6 +29,17 @@ class TrainingService:
     """Manage LoRA training jobs on Runpod"""
 
     @staticmethod
+    def get_hf_username() -> str:
+        """Get HuggingFace username from API token"""
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=HUGGINGFACE_TOKEN)
+            user_info = api.whoami()
+            return user_info['name']
+        except Exception as e:
+            raise Exception(f"Failed to get HuggingFace username: {e}")
+
+    @staticmethod
     def _runpod_graphql(query: str, variables: Dict = None) -> Dict:
         """Execute Runpod GraphQL API request"""
         headers = {
@@ -194,13 +205,14 @@ class TrainingService:
         }
 
     @staticmethod
-    def generate_aitoolkit_config(dataset_data: Dict, config: Dict) -> str:
+    def generate_kohya_config(dataset_data: Dict, config: Dict, dataset_path: str) -> str:
         """
-        Generate AiToolkit config YAML
+        Generate Kohya sd-scripts config (TOML format)
 
         Args:
             dataset_data: Output from prepare_dataset()
             config: Training configuration {gpu_type, rank, steps, lr}
+            dataset_path: Path to training data on pod
         """
         character = dataset_data['character']
         dataset = dataset_data['dataset']
@@ -209,55 +221,53 @@ class TrainingService:
         gpu_type = config.get('gpu_type', 'rtx6000')
         batch_size = 1 if gpu_type == '5090' else 1
 
-        config_yaml = f"""job: extension
-config:
-  name: {dataset['name']}
-  training_folder: "/app/ai-toolkit/output"
-  process:
-    - type: 'ui_trainer'
-      training_folder: "/app/ai-toolkit/output"
-      sqlite_db_path: "./aitk_db.db"
-      device: cuda:0
-      trigger_word: "{character['trigger_word']}"
-      network:
-        type: "lora"
-        linear: {config.get('rank', 16)}
-        linear_alpha: {config.get('rank', 16)}
-      save:
-        dtype: float16
-        save_every: 500
-        max_step_saves_to_keep: 4
-      datasets:
-        - folder_path: "/workspace/training_data"
-          caption_ext: "txt"
-          caption_dropout_rate: 0.05
-          shuffle_tokens: false
-          cache_latents_to_disk: true
-          resolution: [1024, 1024]
-      train:
-        batch_size: {batch_size}
-        steps: {config.get('steps', 2000)}
-        gradient_accumulation_steps: 1
-        train_unet: true
-        train_text_encoder: false
-        content_or_style: balanced
-        gradient_checkpointing: true
-        noise_scheduler: "flowmatch"
-        optimizer: "adamw8bit"
-        lr: {config.get('lr', 0.0002)}
-        ema_config:
-          use_ema: true
-          ema_decay: 0.99
-        dtype: bf16
-  model:
-    name_or_path: "Qwen/Qwen2-VL-2B-Instruct"
-    is_v_pred: false
-    is_flux: false
-meta:
-  name: "{dataset['name']}"
-  version: '1.0'
+        config_toml = f"""# Kohya LoRA Training Config
+# Dataset: {dataset['name']}
+# Character: {character['name']} ({character['trigger_word']})
+
+[general]
+pretrained_model_name_or_path = "/workspace/models/flux1-dev.safetensors"
+clip_l = "/workspace/models/clip_l.safetensors"
+t5xxl = "/workspace/models/t5xxl_fp16.safetensors"
+ae = "/workspace/models/ae.safetensors"
+train_data_dir = "{dataset_path}"
+output_dir = "/workspace/kohya_output/{dataset['name']}"
+output_name = "{dataset['name']}_lora"
+
+[network]
+network_module = "networks.lora_flux"
+network_dim = {config.get('rank', 16)}
+network_alpha = {config.get('rank', 16)}
+
+[training]
+learning_rate = {config.get('lr', 0.0002)}
+max_train_steps = {config.get('steps', 2000)}
+train_batch_size = {batch_size}
+gradient_accumulation_steps = 1
+gradient_checkpointing = true
+mixed_precision = "bf16"
+save_precision = "bf16"
+optimizer_type = "AdamW"
+
+[dataset]
+resolution = "1024,1024"
+caption_extension = ".txt"
+caption_dropout_rate = 0.05
+shuffle_caption = false
+keep_tokens = 1
+cache_latents = true
+cache_latents_to_disk = true
+
+[saving]
+save_every_n_steps = {config.get('save_every_n_steps', 500)}
+save_model_as = "safetensors"
+save_last_n_steps_state = 4
+
+[logging]
+logging_dir = "{dataset_path}/logs"
+log_with = "tensorboard"
 """
-        return config_yaml
+        return config_toml
 
     @staticmethod
     def create_training_zip(dataset_data: Dict) -> BytesIO:
@@ -279,9 +289,10 @@ meta:
                     image_filename = f"image_{i+1:03d}.jpg"
                     zip_file.writestr(image_filename, image_response.content)
 
-                    # Add caption txt
+                    # Add caption txt (use trigger word if caption is empty)
                     caption_filename = f"image_{i+1:03d}.txt"
-                    zip_file.writestr(caption_filename, img['caption'])
+                    caption_text = img['caption'] if img.get('caption') else dataset_data['character']['trigger_word']
+                    zip_file.writestr(caption_filename, caption_text)
 
                     print(f"  ✅ Added {image_filename}")
                 else:
@@ -292,16 +303,12 @@ meta:
         return zip_buffer
 
     @staticmethod
-    def upload_to_runpod(zip_buffer: BytesIO, config_yaml: str, dataset_name: str, ssh_url: str, ssh_port: int) -> str:
+    def upload_to_runpod(zip_buffer: BytesIO, config_content: str, dataset_name: str, ssh_url: str, ssh_port: int, upload_path: str) -> str:
         """
         Upload dataset and config to Runpod via SCP/SSH
         Returns: upload_path on pod
         """
         print("📤 Uploading to Runpod via SSH...")
-
-        # Create unique training folder
-        training_id = str(uuid.uuid4())[:8]
-        upload_path = f"/workspace/training_data_{training_id}"
 
         try:
             import subprocess
@@ -312,9 +319,9 @@ meta:
                 tmp_zip.write(zip_buffer.read())
                 tmp_zip_path = tmp_zip.name
 
-            # Save config to temp file
-            with tempfile.NamedTemporaryFile(suffix='.yaml', delete=False, mode='w') as tmp_config:
-                tmp_config.write(config_yaml)
+            # Save config to temp file (TOML for Kohya)
+            with tempfile.NamedTemporaryFile(suffix='.toml', delete=False, mode='w') as tmp_config:
+                tmp_config.write(config_content)
                 tmp_config_path = tmp_config.name
 
             try:
@@ -329,13 +336,13 @@ meta:
                 subprocess.run(scp_zip_cmd, shell=True, check=True, capture_output=True)
 
                 # Upload config file
-                print(f"  Uploading config YAML...")
-                scp_config_cmd = f"scp -o StrictHostKeyChecking=no -P {ssh_port} {tmp_config_path} {ssh_url}:{upload_path}/config.yaml"
+                print(f"  Uploading config TOML...")
+                scp_config_cmd = f"scp -o StrictHostKeyChecking=no -P {ssh_port} {tmp_config_path} {ssh_url}:{upload_path}/config.toml"
                 subprocess.run(scp_config_cmd, shell=True, check=True, capture_output=True)
 
-                # Unzip on pod
-                print(f"  Extracting dataset...")
-                unzip_cmd = f"ssh -o StrictHostKeyChecking=no -p {ssh_port} {ssh_url} 'cd {upload_path} && unzip -q dataset.zip && rm dataset.zip'"
+                # Unzip on pod into subfolder (Kohya expects parent/subfolder structure)
+                print(f"  Extracting dataset into subfolder...")
+                unzip_cmd = f"ssh -o StrictHostKeyChecking=no -p {ssh_port} {ssh_url} 'cd {upload_path} && mkdir -p 10_character && unzip -q dataset.zip -d 10_character && rm dataset.zip'"
                 subprocess.run(unzip_cmd, shell=True, check=True, capture_output=True)
 
                 print(f"✅ Dataset uploaded to {upload_path}")
@@ -387,36 +394,62 @@ meta:
             # 2. Prepare dataset
             dataset_data = TrainingService.prepare_dataset(dataset_id)
 
-            # 3. Generate config
-            config_yaml = TrainingService.generate_aitoolkit_config(dataset_data, training_config)
+            # 3. Generate upload path
+            import uuid
+            training_id = str(uuid.uuid4())[:8]
+            upload_path = f"/workspace/training_data_{training_id}"
 
-            # 4. Create ZIP
+            # 4. Generate Kohya config
+            config_toml = TrainingService.generate_kohya_config(dataset_data, training_config, upload_path)
+
+            # 5. Create ZIP
             zip_buffer = TrainingService.create_training_zip(dataset_data)
 
-            # 5. Upload to Runpod
-            upload_path = TrainingService.upload_to_runpod(
+            # 6. Upload to Runpod
+            TrainingService.upload_to_runpod(
                 zip_buffer,
-                config_yaml,
+                config_toml,
                 dataset_data['dataset']['name'],
                 ssh_url,
-                ssh_port
+                ssh_port,
+                upload_path
             )
 
-            # 6. Start training via SSH (run in background with nohup)
+            # 7. Kill any existing training processes to free GPU memory
             import subprocess
+            import time
 
-            train_command = f"cd /app/ai-toolkit && nohup python3 run.py {upload_path}/config.yaml > {upload_path}/training.log 2>&1 &"
-            ssh_cmd = f"ssh -o StrictHostKeyChecking=no -p {ssh_port} {ssh_url} '{train_command}'"
+            print(f"🧹 Cleaning up old training processes...")
+            cleanup_cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -p {ssh_port} {ssh_url} 'pkill -9 -f flux_train_network.py'"
 
-            print(f"🚀 Starting training on pod...")
-            result = subprocess.run(ssh_cmd, shell=True, check=True, capture_output=True, timeout=30)
+            try:
+                subprocess.run(cleanup_cmd, shell=True, timeout=30, capture_output=True)
+                print(f"   ✅ Killed old training processes")
+            except Exception as e:
+                print(f"   Note: No old processes to kill ({e})")
 
-            print(f"✅ Training command executed on pod")
+            # Wait for GPU memory to be released
+            time.sleep(3)
 
-            # 7. Create job record
+            # 8. Start training via SSH with Kohya (run in background with nohup)
+            # Use a simple command that returns immediately
+            train_command = f"cd /workspace/sd-scripts && nohup python3 flux_train_network.py --config {upload_path}/config.toml > {upload_path}/training.log 2>&1 </dev/null &"
+            ssh_cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -p {ssh_port} {ssh_url} '{train_command}' &"
+
+            print(f"🚀 Starting training on pod (non-blocking)...")
+
+            # Start in background - don't wait for completion
+            subprocess.Popen(ssh_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # Give it a moment to start
+            time.sleep(2)
+
+            print(f"✅ Training command sent to pod (running in background)")
+
+            # 9. Create job record
             job_id = str(uuid.uuid4())
 
-            # 8. Update dataset with job info
+            # 10. Update dataset with job info
             supabase.table('training_datasets').update({
                 'training_status': 'running',
                 'runpod_job_id': job_id,
@@ -444,46 +477,453 @@ meta:
     @staticmethod
     def check_training_status(job_id: str) -> Dict:
         """
-        Check training job status
+        Check training job status by parsing training.log on pod
 
-        Returns: {status, progress, logs, error}
+        Returns: {status, progress, current_step, total_steps, logs, error}
         """
-        # Query Runpod for job status
-        # For now, return mock data - will implement actual polling
-        return {
-            'status': 'running',  # queued, running, completed, failed
-            'progress': 0,
-            'current_step': 0,
-            'total_steps': 2000,
-            'logs': ''
-        }
+        try:
+            # Get dataset from job_id
+            dataset_result = supabase.table('training_datasets').select('*').eq('runpod_job_id', job_id).single().execute()
+            dataset = dataset_result.data
+
+            if not dataset:
+                return {
+                    'status': 'not_found',
+                    'progress': 0,
+                    'error': 'Job not found'
+                }
+
+            training_path = dataset.get('training_path')
+            training_config = dataset.get('training_config', {})
+            total_steps = training_config.get('steps', 2000)
+            dataset_name = dataset.get('name')
+
+            if not training_path:
+                return {
+                    'status': 'not_started',
+                    'progress': 0,
+                    'error': 'Training path not found'
+                }
+
+            # Get pod SSH details
+            pod_status = TrainingService.get_pod_status()
+            ssh_url = pod_status['ssh_url']
+            ssh_port = pod_status['ssh_port']
+
+            # Check if training completed (final LoRA file exists)
+            output_dir = f"/workspace/kohya_output/{dataset_name}"
+            lora_filename = f"{dataset_name}_lora.safetensors"
+            lora_path = f"{output_dir}/{lora_filename}"
+
+            import subprocess
+
+            check_complete_cmd = f"ssh -o StrictHostKeyChecking=no -p {ssh_port} {ssh_url} 'test -f {lora_path} && echo exists || echo missing'"
+            result = subprocess.run(check_complete_cmd, shell=True, capture_output=True, text=True, timeout=30)
+
+            if 'exists' in result.stdout:
+                # Training completed
+                return {
+                    'status': 'completed',
+                    'progress': 100,
+                    'current_step': total_steps,
+                    'total_steps': total_steps
+                }
+
+            # Read training log to get current progress
+            log_path = f"{training_path}/training.log"
+            read_log_cmd = f"ssh -o StrictHostKeyChecking=no -p {ssh_port} {ssh_url} 'tail -n 50 {log_path} 2>/dev/null || echo \"Log not found\"'"
+            log_result = subprocess.run(read_log_cmd, shell=True, capture_output=True, text=True, timeout=30)
+
+            log_output = log_result.stdout
+
+            if 'Log not found' in log_output or not log_output.strip():
+                return {
+                    'status': 'queued',
+                    'progress': 0,
+                    'current_step': 0,
+                    'total_steps': total_steps,
+                    'logs': 'Training starting...'
+                }
+
+            # Parse log for current step
+            # Kohya logs look like: "steps: 450/2000" or "epoch 1, step 450"
+            import re
+            current_step = 0
+
+            # Try to find step count in various formats
+            step_patterns = [
+                r'steps?:\s*(\d+)/(\d+)',
+                r'step\s+(\d+)',
+                r'Steps:\s*(\d+)',
+            ]
+
+            for pattern in step_patterns:
+                matches = re.findall(pattern, log_output, re.IGNORECASE)
+                if matches:
+                    if isinstance(matches[-1], tuple):
+                        current_step = int(matches[-1][0])
+                    else:
+                        current_step = int(matches[-1])
+                    break
+
+            # Check for errors in log
+            error_keywords = ['error', 'exception', 'failed', 'traceback']
+            has_error = any(keyword in log_output.lower() for keyword in error_keywords)
+
+            if has_error and current_step == 0:
+                return {
+                    'status': 'failed',
+                    'progress': 0,
+                    'current_step': 0,
+                    'total_steps': total_steps,
+                    'error': 'Training failed - check logs',
+                    'logs': log_output[-1000:]  # Last 1000 chars
+                }
+
+            # Calculate progress
+            progress = int((current_step / total_steps) * 100) if total_steps > 0 else 0
+
+            return {
+                'status': 'running',
+                'progress': progress,
+                'current_step': current_step,
+                'total_steps': total_steps,
+                'logs': log_output[-500:]  # Last 500 chars of log
+            }
+
+        except Exception as e:
+            print(f"❌ Error checking training status: {e}")
+            return {
+                'status': 'error',
+                'progress': 0,
+                'error': str(e)
+            }
 
     @staticmethod
-    def download_lora(job_id: str, dataset_id: str) -> str:
+    def download_lora(dataset_id: str) -> Dict:
         """
-        Download trained LoRA from Runpod
-        Upload to Hugging Face
-        Update character record
+        Download trained LoRA from Runpod, upload to Hugging Face, update database
 
-        Returns: huggingface_url
+        Returns: dict with huggingface_url, download_url, file_size
         """
-        print(f"📥 Downloading LoRA for job {job_id}...")
+        print(f"\n📥 Downloading and uploading LoRA for dataset {dataset_id}...")
 
-        # Get dataset info
-        dataset_result = supabase.table('training_datasets').select('*').eq('id', dataset_id).single().execute()
-        dataset = dataset_result.data
+        try:
+            # 1. Get dataset and character info
+            dataset_result = supabase.table('training_datasets').select('*, characters(*)').eq('id', dataset_id).single().execute()
+            dataset = dataset_result.data
+            character = dataset['characters']
 
-        # Download safetensors file from Runpod
-        # This will be implemented based on Runpod's file download API
+            if not dataset.get('training_path'):
+                raise Exception("Training path not found in dataset")
 
-        # Upload to Hugging Face
-        # Will implement with huggingface_hub library
+            training_path = dataset['training_path']
+            dataset_name = dataset['name']
+            output_name = f"{dataset_name}_lora"
 
-        # Update database
-        supabase.table('training_datasets').update({
-            'training_status': 'completed',
-            'lora_download_url': 'pending_implementation',
-            'huggingface_url': 'pending_implementation'
-        }).eq('id', dataset_id).execute()
+            print(f"   Dataset: {dataset_name}")
+            print(f"   Character: {character['name']} ({character['trigger_word']})")
 
-        return 'pending_implementation'
+            # 2. Get pod SSH details
+            pod_status = TrainingService.get_pod_status()
+            ssh_url = pod_status['ssh_url']
+            ssh_port = pod_status['ssh_port']
+
+            # 3. Find ALL checkpoint files on pod (not just final)
+            output_dir = f"/workspace/kohya_output/{dataset_name}"
+
+            print(f"   Looking for checkpoints in: {output_dir}")
+
+            # List all .safetensors files in output directory
+            import subprocess
+            list_cmd = f"ssh -o StrictHostKeyChecking=no -p {ssh_port} {ssh_url} 'ls {output_dir}/*.safetensors 2>/dev/null || echo none'"
+            result = subprocess.run(list_cmd, shell=True, capture_output=True, text=True, timeout=30)
+
+            if 'none' in result.stdout or not result.stdout.strip():
+                raise Exception(f"No checkpoint files found in {output_dir}")
+
+            # Parse checkpoint files
+            checkpoint_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+
+            # 4. Download and upload ALL checkpoints
+            import tempfile
+            import os
+            import re
+
+            print(f"   Found {len(checkpoint_files)} checkpoint(s): {[os.path.basename(f) for f in checkpoint_files]}")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                from huggingface_hub import HfApi, create_repo, upload_file
+
+                api = HfApi(token=HUGGINGFACE_TOKEN)
+
+                # Get HuggingFace username dynamically
+                hf_username = TrainingService.get_hf_username()
+
+                # Get training steps from config
+                training_config = dataset.get('training_config', {})
+                max_steps = training_config.get('steps', 2000)
+
+                # Create repo name with character, dataset, and steps
+                repo_name = f"{character['name'].lower().replace(' ', '-')}-{dataset_name.lower().replace(' ', '-')}-{max_steps}steps-lora"
+                repo_id = f"{hf_username}/{repo_name}"
+
+                # Create repo once (ignore if exists)
+                print(f"   Creating/verifying HuggingFace repo: {repo_id}")
+                try:
+                    create_repo(repo_id=repo_id, repo_type="model", private=False, exist_ok=True, token=HUGGINGFACE_TOKEN)
+                except Exception as e:
+                    print(f"   Note: {e}")
+
+                # Download and upload each checkpoint
+                checkpoint_info = []
+                for checkpoint_path in checkpoint_files:
+                    checkpoint_filename = os.path.basename(checkpoint_path)
+                    local_path = os.path.join(tmpdir, checkpoint_filename)
+
+                    print(f"   Downloading {checkpoint_filename}...")
+                    scp_cmd = f"scp -o StrictHostKeyChecking=no -P {ssh_port} {ssh_url}:{checkpoint_path} {local_path}"
+                    subprocess.run(scp_cmd, shell=True, check=True, timeout=300)
+
+                    file_size_bytes = os.path.getsize(local_path)
+                    file_size_mb = round(file_size_bytes / (1024 * 1024), 2)
+
+                    # Extract step number from filename if present
+                    step_match = re.search(r'-(\d+)\.safetensors$', checkpoint_filename)
+                    step_num = int(step_match.group(1)) if step_match else max_steps
+
+                    # Upload to HuggingFace with clear naming
+                    hf_filename = f"checkpoint-{step_num}.safetensors"
+                    print(f"   Uploading as {hf_filename} ({file_size_mb} MB)...")
+
+                    upload_file(
+                        path_or_fileobj=local_path,
+                        path_in_repo=hf_filename,
+                        repo_id=repo_id,
+                        token=HUGGINGFACE_TOKEN
+                    )
+
+                    checkpoint_info.append({
+                        'step': step_num,
+                        'filename': hf_filename,
+                        'size_mb': file_size_mb
+                    })
+
+                    print(f"   ✅ Uploaded checkpoint at step {step_num}")
+
+                # Sort checkpoints by step
+                checkpoint_info.sort(key=lambda x: x['step'])
+                total_size_mb = sum(c['size_mb'] for c in checkpoint_info)
+
+                # 5. Create model card with all checkpoints listed
+                checkpoints_list = "\n".join([
+                    f"- **[checkpoint-{c['step']}.safetensors]** ({c['size_mb']} MB) - Step {c['step']}"
+                    for c in checkpoint_info
+                ])
+
+                model_card = f"""---
+license: other
+tags:
+- flux
+- lora
+- character
+base_model: black-forest-labs/FLUX.1-dev
+---
+
+# {character['name']} - {dataset_name}
+
+LoRA trained on FLUX.1-dev with {dataset.get('image_count', 'N/A')} images.
+
+**Trigger word:** `{character['trigger_word']}`
+
+## Available Checkpoints
+
+This repo contains {len(checkpoint_info)} checkpoint(s) from different training steps. You can download and compare them to find the best one for your use case.
+
+{checkpoints_list}
+
+**Total Size:** {total_size_mb} MB
+
+## Usage
+
+### In ComfyUI:
+1. Download any `.safetensors` file from the Files tab
+2. Place in `ComfyUI/models/loras/`
+3. Use "Load LoRA" node
+4. Set strength to 0.8-1.0
+5. Include trigger word in prompt: "{character['trigger_word']}, [your prompt]"
+
+**Tip:** Try different checkpoints! Earlier steps (500-1000) may give different results than final step ({max_steps}).
+
+## Training Details
+- **Total Steps:** {max_steps}
+- **Checkpoints Saved:** {len(checkpoint_info)}
+- **Save Frequency:** Every {training_config.get('save_every_n_steps', 500)} steps
+- **Rank:** {training_config.get('rank', 16)}
+- **Learning Rate:** {training_config.get('lr', 0.0002)}
+- **Base Model:** FLUX.1-dev
+- **Training Images:** {dataset.get('image_count', 'N/A')}
+
+## Example Prompts
+```
+{character['trigger_word']}, professional portrait, studio lighting
+{character['trigger_word']}, casual outdoor photo, natural light
+{character['trigger_word']}, creative artistic style
+```
+
+---
+
+*Generated with automated LoRA training system*
+"""
+
+                # Upload model card
+                from io import BytesIO
+                upload_file(
+                    path_or_fileobj=BytesIO(model_card.encode('utf-8')),
+                    path_in_repo="README.md",
+                    repo_id=repo_id,
+                    token=HUGGINGFACE_TOKEN
+                )
+
+                hf_url = f"https://huggingface.co/{repo_id}"
+
+                # Use the latest checkpoint as the main download URL
+                latest_checkpoint = checkpoint_info[-1]
+                download_url = f"https://huggingface.co/{repo_id}/resolve/main/{latest_checkpoint['filename']}"
+
+                print(f"   ✅ Uploaded to: {hf_url}")
+                print(f"   ✅ Uploaded {len(checkpoint_info)} checkpoints")
+
+                # 6. Update database with checkpoint info
+                supabase.table('training_datasets').update({
+                    'training_status': 'uploaded',
+                    'huggingface_url': hf_url,
+                    'lora_download_url': download_url,
+                    'output_filename': latest_checkpoint['filename'],
+                    'file_size_mb': total_size_mb,
+                    'huggingface_repo': repo_id,
+                    'checkpoints': checkpoint_info  # Store all checkpoint info
+                }).eq('id', dataset_id).execute()
+
+                print(f"   ✅ Database updated with {len(checkpoint_info)} checkpoints")
+
+                return {
+                    'huggingface_url': hf_url,
+                    'download_url': download_url,
+                    'file_size_mb': total_size_mb,
+                    'filename': latest_checkpoint['filename'],
+                    'repo_id': repo_id,
+                    'checkpoints': checkpoint_info,
+                    'checkpoint_count': len(checkpoint_info)
+                }
+
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+
+            # Update database with error
+            supabase.table('training_datasets').update({
+                'training_status': 'upload_failed',
+                'training_error': str(e)
+            }).eq('id', dataset_id).execute()
+
+            raise
+
+    @staticmethod
+    async def generate_validation_images(dataset_id: str, checkpoints: List[Dict]) -> List[Dict]:
+        """
+        Generate validation images for each checkpoint using ComfyUI
+
+        Args:
+            dataset_id: Dataset ID
+            checkpoints: List of checkpoint dicts with step, filename, etc.
+
+        Returns:
+            List of validation image records
+        """
+        print(f"\n🖼️  Generating validation images for dataset {dataset_id}...")
+
+        try:
+            # Get dataset and validation prompts
+            dataset_result = supabase.table('training_datasets').select('*, characters(*)').eq('id', dataset_id).single().execute()
+            dataset = dataset_result.data
+            character = dataset['characters']
+
+            validation_prompts = dataset.get('validation_prompts', [])
+            if not validation_prompts:
+                print("   ⚠️  No validation prompts found, skipping image generation")
+                return []
+
+            huggingface_repo = dataset.get('huggingface_repo')
+            if not huggingface_repo:
+                raise Exception("No HuggingFace repo found")
+
+            print(f"   Found {len(validation_prompts)} validation prompts")
+            print(f"   Generating images for {len(checkpoints)} checkpoints")
+
+            # Import ComfyUI service
+            from services.comfyui_service import ComfyUIService
+            comfyui = ComfyUIService()
+
+            validation_images = []
+
+            # Generate images for each checkpoint
+            for checkpoint in checkpoints:
+                step = checkpoint['step']
+                checkpoint_filename = checkpoint['filename']
+
+                print(f"\n   📸 Checkpoint step {step}: Generating {len(validation_prompts)} images...")
+
+                # Create temporary character dict with this checkpoint
+                temp_character = {
+                    'id': character['id'],
+                    'name': character['name'],
+                    'trigger_word': character['trigger_word'],
+                    'lora_file': f"https://huggingface.co/{huggingface_repo}/resolve/main/{checkpoint_filename}",  # Direct HF URL
+                    'lora_strength': 0.9
+                }
+
+                # Generate image for each validation prompt
+                for prompt_idx, prompt in enumerate(validation_prompts):
+                    try:
+                        result = await comfyui.generate(
+                            character=temp_character,
+                            workflow_path="workflows/qwen/instagram_api_fast.json",
+                            prompt_additions=prompt,
+                            lora_strength_override=0.9
+                        )
+
+                        if result.get('success') and result.get('images'):
+                            image_url = result['images'][0]
+
+                            validation_images.append({
+                                'dataset_id': dataset_id,
+                                'checkpoint_step': step,
+                                'prompt': prompt,
+                                'prompt_index': prompt_idx,
+                                'image_url': image_url,
+                                'checkpoint_filename': checkpoint_filename
+                            })
+
+                            print(f"      ✅ Generated image {prompt_idx + 1}/{len(validation_prompts)}")
+                        else:
+                            print(f"      ⚠️  Failed to generate image {prompt_idx + 1}: {result.get('error', 'Unknown error')}")
+
+                    except Exception as e:
+                        print(f"      ❌ Error generating image: {e}")
+
+            print(f"\n   ✅ Generated {len(validation_images)} validation images total")
+
+            # Store in database
+            if validation_images:
+                # Create validation_images table entry or update dataset
+                supabase.table('training_datasets').update({
+                    'validation_images': validation_images
+                }).eq('id', dataset_id).execute()
+
+                print(f"   ✅ Stored validation images in database")
+
+            return validation_images
+
+        except Exception as e:
+            print(f"   ❌ Error generating validation images: {e}")
+            return []
