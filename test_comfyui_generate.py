@@ -44,14 +44,27 @@ async def test_full_generation():
     print(f"   ComfyUI: {service.api_url}")
 
     try:
+        # Fast generation settings
+        sampler_overrides = {
+            "steps": 15,           # Faster (was 30)
+            "cfg": 3.5,            # Guidance
+            "denoise": 0.65,       # img2img strength
+            "seed": 123456         # Reproducible
+        }
+
         print(f"\n🚀 Starting generation...")
         print(f"   Prompt additions: 'professional photo, smiling, elegant pose'")
+        print(f"   Overrides: {sampler_overrides}")
+        print(f"   Fast mode: 1 image only (no upscale)")
 
         result = await service.generate(
             character=test_character,
             workflow_path="workflows/qwen/instagram_single.json",
             input_image_filename="22.jpg",  # Uploaded test image
-            prompt_additions="professional photo, smiling, elegant pose"
+            prompt_additions="professional photo, smiling, elegant pose",
+            sampler_overrides=sampler_overrides,
+            disable_upscale=True,  # Skip upscale for speed
+            lora_strength_override=0.7  # Per-request override
         )
 
         print("\n" + "=" * 70)

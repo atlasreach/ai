@@ -124,6 +124,98 @@ class ComfyUIService:
 
         return workflow
 
+    def apply_sampler_overrides(self, workflow: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Override KSampler parameters (steps, cfg, denoise, etc.)
+
+        Args:
+            workflow: Workflow dictionary
+            overrides: {
+                "steps": int,
+                "cfg": float,
+                "denoise": float,
+                "sampler_name": str,
+                "scheduler": str,
+                "seed": int,
+                "target_node_ids": [3, 79]  # Optional: specific nodes only
+            }
+
+        Returns:
+            Modified workflow
+        """
+        if not overrides:
+            return workflow
+
+        target_ids = set(overrides.get("target_node_ids", []))
+        changes_made = []
+
+        for node in workflow.get("nodes", []):
+            if node.get("type") != "KSampler":
+                continue
+
+            # If target_node_ids specified, only modify those nodes
+            if target_ids and node.get("id") not in target_ids:
+                continue
+
+            widgets = node.get("widgets_values", [])
+            if not widgets or len(widgets) < 7:
+                continue
+
+            # KSampler widgets_values indices:
+            # [0] seed, [1] seed_behavior, [2] steps, [3] cfg,
+            # [4] sampler_name, [5] scheduler, [6] denoise
+
+            node_id = node.get("id")
+            if "seed" in overrides:
+                widgets[0] = overrides["seed"]
+                changes_made.append(f"Node {node_id}: seed={overrides['seed']}")
+            if "steps" in overrides:
+                widgets[2] = overrides["steps"]
+                changes_made.append(f"Node {node_id}: steps={overrides['steps']}")
+            if "cfg" in overrides:
+                widgets[3] = overrides["cfg"]
+                changes_made.append(f"Node {node_id}: cfg={overrides['cfg']}")
+            if "sampler_name" in overrides:
+                widgets[4] = overrides["sampler_name"]
+                changes_made.append(f"Node {node_id}: sampler={overrides['sampler_name']}")
+            if "scheduler" in overrides:
+                widgets[5] = overrides["scheduler"]
+                changes_made.append(f"Node {node_id}: scheduler={overrides['scheduler']}")
+            if "denoise" in overrides:
+                widgets[6] = overrides["denoise"]
+                changes_made.append(f"Node {node_id}: denoise={overrides['denoise']}")
+
+            node["widgets_values"] = widgets
+
+        if changes_made:
+            print(f"   ✓ Applied sampler overrides:")
+            for change in changes_made:
+                print(f"      {change}")
+
+        return workflow
+
+    def disable_nodes_by_type(self, workflow: Dict[str, Any], node_types: list) -> Dict[str, Any]:
+        """
+        Disable specific node types (e.g., to skip upscaling)
+
+        Args:
+            workflow: Workflow dictionary
+            node_types: List of node types to disable (e.g., ["LatentUpscaleBy"])
+
+        Returns:
+            Modified workflow
+        """
+        disabled = []
+        for node in workflow.get("nodes", []):
+            if node.get("type") in node_types:
+                node["disabled"] = True
+                disabled.append(f"{node.get('type')} (node {node.get('id')})")
+
+        if disabled:
+            print(f"   ✓ Disabled nodes: {', '.join(disabled)}")
+
+        return workflow
+
     def build_prompt_from_character(
         self,
         character: Dict[str, Any],
@@ -483,7 +575,10 @@ class ComfyUIService:
         character: Dict[str, Any],
         workflow_path: str = "workflows/qwen/instagram_single.json",
         input_image_filename: Optional[str] = None,
-        prompt_additions: str = ""
+        prompt_additions: str = "",
+        sampler_overrides: Optional[Dict[str, Any]] = None,
+        disable_upscale: bool = False,
+        lora_strength_override: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Complete generation workflow: load, inject, submit, poll
@@ -493,6 +588,9 @@ class ComfyUIService:
             workflow_path: Path to workflow JSON
             input_image_filename: Input image filename (in ComfyUI's input dir)
             prompt_additions: Additional prompt text
+            sampler_overrides: Override sampler settings {"steps": 15, "cfg": 3.5, "denoise": 0.6, ...}
+            disable_upscale: Skip upscale pass for faster generation (1 image instead of 2)
+            lora_strength_override: Override LoRA strength per-request
 
         Returns:
             {
@@ -514,7 +612,7 @@ class ComfyUIService:
 
             # 2. Inject LoRA
             if lora_file := character.get("lora_file"):
-                lora_strength = character.get("lora_strength", 0.8)
+                lora_strength = lora_strength_override if lora_strength_override is not None else character.get("lora_strength", 0.8)
                 workflow = self.inject_lora(workflow, lora_file, lora_strength)
 
             # 3. Build and inject prompt
@@ -524,6 +622,18 @@ class ComfyUIService:
             # 4. Inject input image (if provided)
             if input_image_filename:
                 workflow = self.inject_input_image(workflow, input_image_filename)
+
+            # 5. Apply sampler overrides (steps, cfg, denoise, etc.)
+            if sampler_overrides:
+                workflow = self.apply_sampler_overrides(workflow, sampler_overrides)
+
+            # 6. Disable upscale if requested (for 1 image instead of 2)
+            if disable_upscale:
+                for node in workflow.get("nodes", []):
+                    # Disable upscale sampler (node 79) and upscale node (node 78)
+                    if node.get("id") in [78, 79]:  # LatentUpscaleBy and second KSampler
+                        node["disabled"] = True
+                        print(f"   ✓ Disabled node {node.get('id')} ({node.get('type')}) for fast mode")
 
             # 5. Submit to ComfyUI
             print(f"   📤 Submitting to ComfyUI...")

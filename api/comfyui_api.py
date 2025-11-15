@@ -52,6 +52,9 @@ class GenerateRequest(BaseModel):
     workflow: str = "qwen_single"  # Workflow name shorthand
     input_image_filename: Optional[str] = None  # Image filename in ComfyUI's input directory
     prompt_additions: Optional[str] = ""  # Additional prompt text
+    sampler_overrides: Optional[dict] = None  # {"steps": 15, "cfg": 3.5, "denoise": 0.6, ...}
+    disable_upscale: bool = False  # Skip upscale for faster generation
+    lora_strength: Optional[float] = None  # Override LoRA strength
 
 class GenerateResponse(BaseModel):
     success: bool
@@ -300,12 +303,13 @@ async def generate(request: GenerateRequest):
         if character.get("comfyui_workflow"):
             workflow_path = character["comfyui_workflow"]
 
-        # 2. Submit to ComfyUI (just submit, don't wait)
+        # 2. Start generation (submit only, don't wait for completion)
+        # We'll use manual workflow injection for async submission
         workflow = comfyui_service.load_workflow(workflow_path)
 
         # Inject parameters
         if lora_file := character.get("lora_file"):
-            lora_strength = character.get("lora_strength", 0.8)
+            lora_strength = request.lora_strength if request.lora_strength is not None else character.get("lora_strength", 0.8)
             workflow = comfyui_service.inject_lora(workflow, lora_file, lora_strength)
 
         positive_prompt = comfyui_service.build_prompt_from_character(
@@ -316,6 +320,15 @@ async def generate(request: GenerateRequest):
 
         if request.input_image_filename:
             workflow = comfyui_service.inject_input_image(workflow, request.input_image_filename)
+
+        # Apply overrides
+        if request.sampler_overrides:
+            workflow = comfyui_service.apply_sampler_overrides(workflow, request.sampler_overrides)
+
+        if request.disable_upscale:
+            for node in workflow.get("nodes", []):
+                if node.get("type") == "KSampler" and node.get("id") == 79:
+                    node["disabled"] = True
 
         # Submit
         print(f"   📤 Submitting to ComfyUI...")

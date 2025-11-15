@@ -148,9 +148,7 @@ export default function DatasetCreator() {
         trigger_word: newCharacterTrigger.toLowerCase(),
         character_constraints: { constants: [] },
         is_active: true,
-        lora_file: 'pending_training.safetensors', // Placeholder until training is complete
-        lora_strength: 0.8,
-        comfyui_workflow: 'workflows/qwen/instagram_single.json'
+        lora_file: 'pending_training.safetensors' // Placeholder until training is complete
       };
 
       console.log('📤 Inserting character:', newCharacter);
@@ -280,35 +278,59 @@ export default function DatasetCreator() {
   };
 
   const createDataset = async () => {
-    if (!selectedCharacter || !datasetName) return;
+    console.log('🚀 Create dataset called', { selectedCharacter, datasetName, datasetType });
+
+    if (!selectedCharacter || !datasetName) {
+      console.log('❌ Missing character or dataset name');
+      alert('Please enter a dataset name');
+      return;
+    }
 
     try {
+      // Generate UUID for dataset
+      const datasetId = crypto.randomUUID();
+
+      const newDataset = {
+        id: datasetId,
+        character_id: selectedCharacter.id,
+        name: datasetName,
+        dataset_type: datasetType,
+        description: datasetDescription || '',
+        dataset_constraints: {
+          rules: [
+            { key: 'clothing', value: datasetType === 'SFW' ? 'required' : 'optional' }
+          ]
+        },
+        image_count: 0
+      };
+
+      console.log('📤 Creating dataset:', newDataset);
+
       // Create dataset in Supabase
       const { data, error } = await supabase
         .from('training_datasets')
-        .insert([{
-          character_id: selectedCharacter.id,
-          name: datasetName,
-          dataset_type: datasetType,
-          description: datasetDescription,
-          dataset_constraints: {
-            rules: [
-              { key: 'clothing', value: datasetType === 'SFW' ? 'required' : 'optional' }
-            ]
-          },
-          image_count: 0
-        }])
+        .insert([newDataset])
         .select()
         .single();
 
-      if (data && !error) {
+      console.log('📥 Response:', { data, error });
+
+      if (error) {
+        console.error('❌ Supabase error:', error);
+        alert(`Error creating dataset: ${error.message}`);
+        return;
+      }
+
+      if (data) {
+        console.log('✅ Dataset created successfully');
         setCurrentDataset(data);
         setCurrentStep('upload');
         // Build caption format locally
         buildCaptionFormatLocal(selectedCharacter, data);
       }
     } catch (error) {
-      console.error('Error creating dataset:', error);
+      console.error('❌ Exception creating dataset:', error);
+      alert(`Exception: ${error}`);
     }
   };
 
@@ -341,10 +363,15 @@ export default function DatasetCreator() {
   };
 
   const uploadImagesToS3 = async () => {
-    if (!uploadedImages.length || !currentDataset) return;
+    if (!uploadedImages.length || !currentDataset) {
+      console.log('❌ No images or dataset');
+      return;
+    }
 
+    console.log('📤 Starting upload:', { imageCount: uploadedImages.length, datasetId: currentDataset.id });
     setIsUploading(true);
     const urls: string[] = [];
+    const errors: string[] = [];
 
     try {
       for (let i = 0; i < uploadedImages.length; i++) {
@@ -352,29 +379,54 @@ export default function DatasetCreator() {
         const fileExt = file.name.split('.').pop();
         const fileName = `${currentDataset.id}/${Date.now()}_${i}.${fileExt}`;
 
+        console.log(`📸 Uploading image ${i + 1}/${uploadedImages.length}: ${fileName}`);
+
         // Upload to Supabase Storage
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('training-images')
-          .upload(fileName, file);
+          .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: false
+          });
 
-        if (uploadData && !uploadError) {
+        console.log(`Response for ${fileName}:`, { uploadData, uploadError });
+
+        if (uploadError) {
+          console.error(`❌ Upload error for ${fileName}:`, uploadError);
+          errors.push(`${file.name}: ${uploadError.message}`);
+          continue;
+        }
+
+        if (uploadData) {
           // Get public URL
           const { data: { publicUrl } } = supabase.storage
             .from('training-images')
             .getPublicUrl(fileName);
 
+          console.log(`✅ Uploaded successfully, URL: ${publicUrl}`);
           urls.push(publicUrl);
 
           // Insert into training_images table
-          await supabase
+          const { error: dbError } = await supabase
             .from('training_images')
             .insert([{
+              id: crypto.randomUUID(),
               dataset_id: currentDataset.id,
               image_url: publicUrl,
               caption: '', // Will be generated later
               display_order: i
             }]);
+
+          if (dbError) {
+            console.error('❌ Database insert error:', dbError);
+          }
         }
+      }
+
+      console.log(`✅ Upload complete: ${urls.length} successful, ${errors.length} failed`);
+
+      if (errors.length > 0) {
+        alert(`Upload completed with errors:\n${errors.join('\n')}`);
       }
 
       setUploadedImageUrls(urls);
@@ -385,9 +437,14 @@ export default function DatasetCreator() {
         .update({ image_count: urls.length })
         .eq('id', currentDataset.id);
 
-      setCurrentStep('captions');
+      if (urls.length > 0) {
+        setCurrentStep('captions');
+      } else {
+        alert('No images were uploaded successfully. Please check console for errors.');
+      }
     } catch (error) {
-      console.error('Error uploading images:', error);
+      console.error('❌ Exception uploading images:', error);
+      alert(`Error: ${error}`);
     } finally {
       setIsUploading(false);
     }
