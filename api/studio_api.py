@@ -735,6 +735,14 @@ try:
 except Exception as e:
     print(f"⚠️  Dataset Creator API not available: {e}")
 
+# Import and mount training API router
+try:
+    from api.training_api import router as training_router
+    app.include_router(training_router)
+    print("✅ Training API mounted")
+except Exception as e:
+    print(f"⚠️  Training API not available: {e}")
+
 # ============================================================================
 # MAIN
 # ============================================================================

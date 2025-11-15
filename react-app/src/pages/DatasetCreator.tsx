@@ -3,7 +3,9 @@ import { supabase } from '../lib/supabase';
 
 // Backend API only used for Grok caption generation (requires API key)
 // All other operations use Supabase directly
-const API_BASE = 'http://localhost:8002';
+const API_BASE = window.location.hostname === 'localhost'
+  ? 'http://localhost:8002'
+  : `https://vigilant-rotary-phone-7v5g5q99jpjjfw57w-8002.app.github.dev`;
 
 // Preset constraint templates
 const CONSTRAINT_PRESETS = {
@@ -451,29 +453,53 @@ export default function DatasetCreator() {
   };
 
   const generateCaptions = async () => {
-    if (!currentDataset || !uploadedImageUrls.length) return;
+    console.log('🤖 Generate captions called', { currentDataset, imageCount: uploadedImageUrls.length });
 
+    if (!currentDataset || !uploadedImageUrls.length) {
+      console.log('❌ Missing dataset or images');
+      alert('No dataset or images to caption');
+      return;
+    }
+
+    console.log(`📤 Sending ${uploadedImageUrls.length} images to backend for captioning...`);
     setIsGenerating(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE}/api/datasets/${currentDataset.id}/generate-captions-batch`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            dataset_id: currentDataset.id,
-            image_urls: uploadedImageUrls
-          })
-        }
-      );
+      const url = `${API_BASE}/api/datasets/${currentDataset.id}/generate-captions-batch`;
+      console.log(`🌐 Calling: ${url}`);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataset_id: currentDataset.id,
+          image_urls: uploadedImageUrls
+        })
+      });
+
+      console.log(`📥 Response status: ${response.status}`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ API error:', errorText);
+        alert(`API error: ${response.status} - ${errorText}`);
+        return;
+      }
 
       const data = await response.json();
+      console.log('📥 Response data:', data);
+
       if (data.success) {
+        console.log(`✅ Captions generated! ${data.succeeded}/${data.total} successful`);
+        alert(`Generated ${data.succeeded}/${data.total} captions successfully!`);
         loadDatasetImages(currentDataset.id);
+      } else {
+        console.error('❌ Caption generation failed:', data);
+        alert('Caption generation failed - check console');
       }
     } catch (error) {
-      console.error('Error generating captions:', error);
+      console.error('❌ Exception generating captions:', error);
+      alert(`Error: ${error}`);
     } finally {
       setIsGenerating(false);
     }

@@ -1,468 +1,292 @@
 """
 ComfyUI API service for programmatic image generation
-Dynamically loads workflows and injects character parameters
+Uses API-format prompts exported from ComfyUI (Download Prompt)
+and only tweaks a few inputs (LoRA, text, sampler, image).
 """
+
 import os
 import json
 import time
 import asyncio
-import aiohttp
-import websockets
-from typing import Optional, Dict, Any
-from dotenv import load_dotenv
+from typing import Optional, Dict, Any, List
 from pathlib import Path
+
+import aiohttp
+from dotenv import load_dotenv
 
 load_dotenv()
 
-COMFYUI_API_URL = os.getenv('COMFYUI_API_URL', 'http://localhost:8188')
+COMFYUI_API_URL = os.getenv("COMFYUI_API_URL", "http://localhost:8188")
+
 
 class ComfyUIService:
-    """Service for calling ComfyUI API with dynamic workflow injection"""
+    """Service for calling ComfyUI API with API-format prompt JSON."""
 
-    def __init__(self, api_url: str = None):
-        self.api_url = api_url or COMFYUI_API_URL
-        self.api_url = self.api_url.rstrip('/')
+    def __init__(self, api_url: Optional[str] = None):
+        self.api_url = (api_url or COMFYUI_API_URL).rstrip("/")
 
-    def load_workflow(self, workflow_path: str) -> Dict[str, Any]:
+    # -------------------------------------------------------------------------
+    # 1. Loading the API prompt (exactly what the UI uses)
+    # -------------------------------------------------------------------------
+    def load_api_prompt(self, workflow_path: str) -> Dict[str, Any]:
         """
-        Load workflow JSON from file
+        Load a ComfyUI prompt that is ALREADY in API format
+        (dict keyed by node id strings).
 
-        Args:
-            workflow_path: Path to workflow JSON (relative or absolute)
-
-        Returns:
-            Workflow dictionary
+        You get this from the ComfyUI UI using:
+        - "Download Prompt" / "Copy (API format)"
         """
-        # Handle relative paths from project root
         if not os.path.isabs(workflow_path):
             project_root = Path(__file__).parent.parent
             workflow_path = project_root / workflow_path
 
-        with open(workflow_path, 'r') as f:
-            workflow = json.load(f)
+        with open(workflow_path, "r") as f:
+            prompt = json.load(f)
 
-        return workflow
+        return prompt
 
-    def inject_lora(self, workflow: Dict[str, Any], lora_file: str, strength: float = 0.8) -> Dict[str, Any]:
-        """
-        Inject LoRA file and strength into workflow
-
-        Args:
-            workflow: Workflow dictionary
-            lora_file: LoRA filename (e.g., "milan_000002000.safetensors")
-            strength: LoRA strength (0.0 - 1.0)
-
-        Returns:
-            Modified workflow
-        """
-        # Find LoraLoaderModelOnly node
-        for node in workflow.get("nodes", []):
-            if node.get("type") == "LoraLoaderModelOnly":
-                # Update widgets_values: [lora_name, strength]
-                node["widgets_values"] = [lora_file, strength]
-                print(f"   ✓ Injected LoRA: {lora_file} (strength: {strength})")
-                break
-
-        return workflow
-
-    def inject_prompt(self, workflow: Dict[str, Any], positive_prompt: str, negative_prompt: str = "") -> Dict[str, Any]:
-        """
-        Inject positive and negative prompts into workflow
-
-        Args:
-            workflow: Workflow dictionary
-            positive_prompt: Positive prompt text
-            negative_prompt: Negative prompt text (optional)
-
-        Returns:
-            Modified workflow
-        """
-        # Find prompt nodes
-        for node in workflow.get("nodes", []):
-            if node.get("type") == "CLIPTextEncode":
-                title = node.get("title", "").lower()
-
-                if "positive" in title:
-                    node["widgets_values"] = [positive_prompt]
-                    print(f"   ✓ Injected positive prompt: {positive_prompt[:60]}...")
-
-                elif "negative" in title:
-                    node["widgets_values"] = [negative_prompt]
-                    if negative_prompt:
-                        print(f"   ✓ Injected negative prompt: {negative_prompt[:60]}...")
-
-        return workflow
-
-    def inject_input_image(self, workflow: Dict[str, Any], image_filename: str) -> Dict[str, Any]:
-        """
-        Inject input image into workflow
-
-        Args:
-            workflow: Workflow dictionary
-            image_filename: Image filename in ComfyUI's input directory
-
-        Returns:
-            Modified workflow
-        """
-        if not image_filename:
-            print(f"   ⚠ No input image provided - will use text-to-image mode")
-            # Disable LoadImage node for text-to-image generation
-            for node in workflow.get("nodes", []):
-                if node.get("type") == "LoadImage":
-                    node["disabled"] = True
-                elif node.get("type") == "VAEEncode":
-                    node["disabled"] = True
-            return workflow
-
-        # Find LoadImage node
-        for node in workflow.get("nodes", []):
-            if node.get("type") == "LoadImage":
-                # Update widgets_values: [filename, "image"]
-                node["widgets_values"] = [image_filename, "image"]
-                print(f"   ✓ Injected input image: {image_filename}")
-                break
-
-        return workflow
-
-    def apply_sampler_overrides(self, workflow: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Override KSampler parameters (steps, cfg, denoise, etc.)
-
-        Args:
-            workflow: Workflow dictionary
-            overrides: {
-                "steps": int,
-                "cfg": float,
-                "denoise": float,
-                "sampler_name": str,
-                "scheduler": str,
-                "seed": int,
-                "target_node_ids": [3, 79]  # Optional: specific nodes only
-            }
-
-        Returns:
-            Modified workflow
-        """
-        if not overrides:
-            return workflow
-
-        target_ids = set(overrides.get("target_node_ids", []))
-        changes_made = []
-
-        for node in workflow.get("nodes", []):
-            if node.get("type") != "KSampler":
-                continue
-
-            # If target_node_ids specified, only modify those nodes
-            if target_ids and node.get("id") not in target_ids:
-                continue
-
-            widgets = node.get("widgets_values", [])
-            if not widgets or len(widgets) < 7:
-                continue
-
-            # KSampler widgets_values indices:
-            # [0] seed, [1] seed_behavior, [2] steps, [3] cfg,
-            # [4] sampler_name, [5] scheduler, [6] denoise
-
-            node_id = node.get("id")
-            if "seed" in overrides:
-                widgets[0] = overrides["seed"]
-                changes_made.append(f"Node {node_id}: seed={overrides['seed']}")
-            if "steps" in overrides:
-                widgets[2] = overrides["steps"]
-                changes_made.append(f"Node {node_id}: steps={overrides['steps']}")
-            if "cfg" in overrides:
-                widgets[3] = overrides["cfg"]
-                changes_made.append(f"Node {node_id}: cfg={overrides['cfg']}")
-            if "sampler_name" in overrides:
-                widgets[4] = overrides["sampler_name"]
-                changes_made.append(f"Node {node_id}: sampler={overrides['sampler_name']}")
-            if "scheduler" in overrides:
-                widgets[5] = overrides["scheduler"]
-                changes_made.append(f"Node {node_id}: scheduler={overrides['scheduler']}")
-            if "denoise" in overrides:
-                widgets[6] = overrides["denoise"]
-                changes_made.append(f"Node {node_id}: denoise={overrides['denoise']}")
-
-            node["widgets_values"] = widgets
-
-        if changes_made:
-            print(f"   ✓ Applied sampler overrides:")
-            for change in changes_made:
-                print(f"      {change}")
-
-        return workflow
-
-    def disable_nodes_by_type(self, workflow: Dict[str, Any], node_types: list) -> Dict[str, Any]:
-        """
-        Disable specific node types (e.g., to skip upscaling)
-
-        Args:
-            workflow: Workflow dictionary
-            node_types: List of node types to disable (e.g., ["LatentUpscaleBy"])
-
-        Returns:
-            Modified workflow
-        """
-        disabled = []
-        for node in workflow.get("nodes", []):
-            if node.get("type") in node_types:
-                node["disabled"] = True
-                disabled.append(f"{node.get('type')} (node {node.get('id')})")
-
-        if disabled:
-            print(f"   ✓ Disabled nodes: {', '.join(disabled)}")
-
-        return workflow
-
+    # -------------------------------------------------------------------------
+    # 2. Helpers for building prompts from your "character" dict
+    # -------------------------------------------------------------------------
     def build_prompt_from_character(
         self,
         character: Dict[str, Any],
-        prompt_additions: str = ""
+        prompt_additions: str = "",
     ) -> str:
         """
-        Build prompt from character data + user additions
+        Build the positive prompt from stored character info + user additions.
 
-        Args:
-            character: Character dict with trigger_word and character_constraints
-            prompt_additions: Additional prompt text from user
-
-        Returns:
-            Complete prompt string
+        Expects character to look like:
+        {
+            "id": "milan",
+            "name": "Milan",
+            "trigger_word": "milan",
+            "lora_file": "milan_000002000.safetensors",
+            "lora_strength": 0.8,
+            "character_constraints": {
+                "constants": [
+                    {"type": "physical", "key": "hair", "value": "blonde"},
+                    ...
+                ]
+            }
+        }
         """
-        parts = []
+        parts: List[str] = []
 
-        # Add trigger word
+        # Trigger word
         if trigger_word := character.get("trigger_word"):
             parts.append(trigger_word)
 
-        # Add character constraints
-        if constraints := character.get("character_constraints", {}).get("constants", []):
-            for constraint in constraints:
-                if constraint.get("type") == "physical":
-                    parts.append(constraint.get("value"))
+        # Physical constraints, etc.
+        constraints = character.get("character_constraints", {}).get(
+            "constants", []
+        )
+        for constraint in constraints:
+            if constraint.get("type") == "physical":
+                value = constraint.get("value")
+                if value:
+                    parts.append(value)
 
-        # Add user additions
+        # User extra text
         if prompt_additions:
             parts.append(prompt_additions)
 
-        prompt = ", ".join(parts)
-        return prompt
+        return ", ".join(parts)
 
-    def find_link_source(self, workflow: Dict[str, Any], link_id: int) -> Optional[list]:
+    # -------------------------------------------------------------------------
+    # 3. API-prompt injection helpers
+    # -------------------------------------------------------------------------
+    def api_inject_lora(
+        self,
+        prompt: Dict[str, Any],
+        lora_file: str,
+        strength: float = 0.8,
+        lora_node_id: str = "74",
+    ) -> None:
         """
-        Find the source node and slot for a given link ID
+        Set LoRA name + strength in API prompt.
 
-        Args:
-            workflow: Workflow dict
-            link_id: Link ID to find
-
-        Returns:
-            [source_node_id, source_slot] or None
+        Default node id "74" is from your current workflow.
         """
-        for link in workflow.get("links", []):
-            # link format: [link_id, source_node_id, source_slot, target_node_id, target_slot, link_type]
-            if link[0] == link_id:
-                return [str(link[1]), link[2]]  # [source_node_id, source_slot]
-        return None
+        node = prompt.get(lora_node_id)
+        if node and node.get("class_type") == "LoraLoaderModelOnly":
+            node_inputs = node.setdefault("inputs", {})
+            node_inputs["lora_name"] = lora_file
+            node_inputs["strength_model"] = strength
+            print(f"   ✓ Injected LoRA: {lora_file} (strength: {strength})")
+        else:
+            print(
+                f"   ⚠ LoRA node {lora_node_id} not found or not LoraLoaderModelOnly"
+            )
 
-    def convert_workflow_to_api_format(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
+    def api_inject_prompts(
+        self,
+        prompt: Dict[str, Any],
+        positive: str,
+        negative: str = "",
+    ) -> None:
         """
-        Convert workflow from JSON format to ComfyUI API format
-        Simplified version that preserves more information
-
-        Args:
-            workflow: Workflow dict with nodes as array
-
-        Returns:
-            Dict keyed by node ID (as string)
+        Set positive/negative CLIP text based on node IDs.
+        Node 6 = positive, Node 7 = negative in your workflow.
         """
-        # UI-only node types to skip
-        UI_ONLY_NODES = ["MarkdownNote", "Note"]
+        # Node 6 is positive prompt
+        node_6 = prompt.get("6")
+        if node_6 and node_6.get("class_type") == "CLIPTextEncode":
+            inputs = node_6.setdefault("inputs", {})
+            inputs["text"] = positive
+            print(f"   ✓ Injected positive prompt: {positive[:60]}...")
 
-        api_prompt = {}
+        # Node 7 is negative prompt
+        node_7 = prompt.get("7")
+        if node_7 and node_7.get("class_type") == "CLIPTextEncode":
+            inputs = node_7.setdefault("inputs", {})
+            inputs["text"] = negative
+            if negative:
+                print(f"   ✓ Injected negative prompt: {negative[:60]}...")
 
-        for node in workflow.get("nodes", []):
-            node_id = str(node.get("id"))
-            node_type = node.get("type")
-
-            # Skip UI-only nodes
-            if node_type in UI_ONLY_NODES:
-                continue
-
-            # Build the node structure ComfyUI expects
-            api_node = {
-                "class_type": node_type,
-                "inputs": {}
-            }
-
-            # Handle inputs from links (connections between nodes)
-            for input_def in node.get("inputs", []):
-                if isinstance(input_def, dict):
-                    input_name = input_def.get("name")
-                    if "link" in input_def and input_def["link"] is not None:
-                        # Find the source node for this link
-                        source_info = self.find_link_source(workflow, input_def["link"])
-                        if source_info:
-                            api_node["inputs"][input_name] = source_info
-
-            # Handle widgets_values based on node type
-            widgets_values = node.get("widgets_values", [])
-
-            if node_type == "CLIPTextEncode" and len(widgets_values) >= 1:
-                # Text goes directly into inputs
-                api_node["inputs"]["text"] = widgets_values[0]
-
-            elif node_type == "LoraLoaderModelOnly" and len(widgets_values) >= 2:
-                # LoRA name and strength
-                api_node["inputs"]["lora_name"] = widgets_values[0]
-                api_node["inputs"]["strength_model"] = widgets_values[1]
-
-            elif node_type == "LoadImage" and len(widgets_values) >= 1:
-                # Image filename
-                api_node["inputs"]["image"] = widgets_values[0]
-
-            elif node_type == "UNETLoader" and len(widgets_values) >= 1:
-                api_node["inputs"]["unet_name"] = widgets_values[0]
-                if len(widgets_values) >= 2:
-                    api_node["inputs"]["weight_dtype"] = widgets_values[1]
-
-            elif node_type == "CLIPLoader" and len(widgets_values) >= 1:
-                api_node["inputs"]["clip_name"] = widgets_values[0]
-                if len(widgets_values) >= 2:
-                    api_node["inputs"]["type"] = widgets_values[1]
-
-            elif node_type == "VAELoader" and len(widgets_values) >= 1:
-                api_node["inputs"]["vae_name"] = widgets_values[0]
-
-            elif node_type == "KSampler" and len(widgets_values) >= 7:
-                api_node["inputs"]["seed"] = widgets_values[0]
-                api_node["inputs"]["control_after_generate"] = widgets_values[1]
-                api_node["inputs"]["steps"] = widgets_values[2]
-                api_node["inputs"]["cfg"] = widgets_values[3]
-                api_node["inputs"]["sampler_name"] = widgets_values[4]
-                api_node["inputs"]["scheduler"] = widgets_values[5]
-                api_node["inputs"]["denoise"] = widgets_values[6]
-
-            elif node_type == "ModelSamplingAuraFlow" and len(widgets_values) >= 1:
-                api_node["inputs"]["shift"] = widgets_values[0]
-
-            elif node_type == "EmptySD3LatentImage" and len(widgets_values) >= 3:
-                api_node["inputs"]["width"] = widgets_values[0]
-                api_node["inputs"]["height"] = widgets_values[1]
-                api_node["inputs"]["batch_size"] = widgets_values[2]
-
-            elif node_type == "LatentUpscaleBy" and len(widgets_values) >= 2:
-                api_node["inputs"]["upscale_method"] = widgets_values[0]
-                api_node["inputs"]["scale_by"] = widgets_values[1]
-
-            elif node_type in ["SaveImage", "PreviewImage"] and len(widgets_values) >= 1:
-                api_node["inputs"]["filename_prefix"] = widgets_values[0]
-
-            # VAEEncode and VAEDecode have no widgets_values, only connections
-            # which are already handled above
-
-            api_prompt[node_id] = api_node
-
-        return api_prompt
-
-    def debug_workflow(self, workflow: Dict[str, Any], api_workflow: Dict[str, Any]):
+    def api_inject_input_image(
+        self,
+        prompt: Dict[str, Any],
+        image_filename: Optional[str],
+        load_image_node_id: str = "76",
+        ksampler_node_id: str = "3",
+        text_latent_node_id: str = "58",
+    ) -> None:
         """
-        Debug method to see what's being sent to ComfyUI
+        Inject or disable the image path.
+
+        If `image_filename` is provided:
+          - Set LoadImage node's `image` input.
+
+        If not provided:
+          - Switch the KSampler's latent to a text-only latent node
+            (e.g. EmptySD3LatentImage, id "58" in your graph).
         """
-        print("\n🔍 DEBUG - Workflow Conversion:")
-        print(f"   Original nodes: {len(workflow.get('nodes', []))}")
-        print(f"   API nodes: {len(api_workflow)}")
+        if image_filename:
+            node = prompt.get(load_image_node_id)
+            if node and node.get("class_type") == "LoadImage":
+                node_inputs = node.setdefault("inputs", {})
+                node_inputs["image"] = image_filename
+                print(f"   ✓ Injected input image: {image_filename}")
+            else:
+                print(
+                    f"   ⚠ LoadImage node {load_image_node_id} not found or wrong class_type"
+                )
+        else:
+            # Switch to text-only latent
+            ksampler = prompt.get(ksampler_node_id)
+            if ksampler and ksampler.get("class_type") == "KSampler":
+                k_inputs = ksampler.setdefault("inputs", {})
+                # ["58", 0] means "take output 0 of node 58"
+                k_inputs["latent_image"] = [text_latent_node_id, 0]
+                print(
+                    f"   ✓ Switched KSampler {ksampler_node_id} to text-only latent (node {text_latent_node_id})"
+                )
+            else:
+                print(
+                    f"   ⚠ KSampler node {ksampler_node_id} not found or wrong class_type"
+                )
 
-        # Save to file for inspection
-        debug_path = Path(__file__).parent.parent / "debug_workflow.json"
-        with open(debug_path, "w") as f:
-            json.dump(api_workflow, f, indent=2)
-        print(f"   💾 Saved debug_workflow.json")
-
-        # Show key nodes
-        for node_id, node_data in api_workflow.items():
-            class_type = node_data.get('class_type')
-            if class_type in ["LoraLoaderModelOnly", "CLIPTextEncode", "LoadImage"]:
-                print(f"\n   Node {node_id} ({class_type}):")
-                print(f"      Inputs: {node_data.get('inputs', {})}")
-
-    async def submit_prompt(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
+    def api_apply_sampler_overrides(
+        self,
+        prompt: Dict[str, Any],
+        overrides: Dict[str, Any],
+        ksampler_node_id: str = "3",
+    ) -> None:
         """
-        Submit workflow to ComfyUI API
+        Override KSampler parameters for this API prompt.
 
-        Args:
-            workflow: Complete workflow with all injections
+        overrides can contain:
+        - seed: int
+        - steps: int
+        - cfg: float
+        - sampler_name: str
+        - scheduler: str
+        - denoise: float
+        """
+        node = prompt.get(ksampler_node_id)
+        if not node or node.get("class_type") != "KSampler":
+            print(
+                f"   ⚠ KSampler node {ksampler_node_id} not found or wrong class_type"
+            )
+            return
 
-        Returns:
-            {
-                "success": bool,
-                "prompt_id": str,
-                "error": str (optional)
-            }
+        inputs = node.setdefault("inputs", {})
+        changes = []
+
+        if "seed" in overrides:
+            inputs["seed"] = overrides["seed"]
+            changes.append(f"seed={overrides['seed']}")
+        if "steps" in overrides:
+            inputs["steps"] = overrides["steps"]
+            changes.append(f"steps={overrides['steps']}")
+        if "cfg" in overrides:
+            inputs["cfg"] = overrides["cfg"]
+            changes.append(f"cfg={overrides['cfg']}")
+        if "sampler_name" in overrides:
+            inputs["sampler_name"] = overrides["sampler_name"]
+            changes.append(f"sampler={overrides['sampler_name']}")
+        if "scheduler" in overrides:
+            inputs["scheduler"] = overrides["scheduler"]
+            changes.append(f"scheduler={overrides['scheduler']}")
+        if "denoise" in overrides:
+            inputs["denoise"] = overrides["denoise"]
+            changes.append(f"denoise={overrides['denoise']}")
+
+        node["inputs"] = inputs
+
+        if changes:
+            print("   ✓ Sampler overrides:", ", ".join(changes))
+
+    # -------------------------------------------------------------------------
+    # 4. ComfyUI API calls
+    # -------------------------------------------------------------------------
+    async def submit_prompt(self, api_prompt: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Submit an API-format prompt to ComfyUI.
+
+        `api_prompt` must already be a dict keyed by node id.
         """
         try:
-            # Convert workflow to ComfyUI API format (dict keyed by node ID)
-            api_workflow = self.convert_workflow_to_api_format(workflow)
-
-            # Debug the conversion
-            self.debug_workflow(workflow, api_workflow)
-
-            # ComfyUI expects the workflow in a specific format
             payload = {
-                "prompt": api_workflow,
-                "client_id": f"agent2_{int(time.time())}"
+                "prompt": api_prompt,
+                "client_id": f"agent2_{int(time.time())}",
             }
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.api_url}/prompt",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         return {
                             "success": False,
-                            "error": f"ComfyUI API error: {response.status} - {error_text}"
+                            "error": f"ComfyUI API error: {response.status} - {error_text}",
                         }
 
                     result = await response.json()
 
-                    # ComfyUI returns {"prompt_id": "...", "number": N, "node_errors": {...}}
                     if "prompt_id" in result:
-                        return {
-                            "success": True,
-                            "prompt_id": result["prompt_id"]
-                        }
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"No prompt_id in response: {result}"
-                        }
+                        return {"success": True, "prompt_id": result["prompt_id"]}
+                    return {
+                        "success": False,
+                        "error": f"No prompt_id in response: {result}",
+                    }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
-    async def get_history(self, prompt_id: str) -> Dict[str, Any]:
+    async def get_history(self, prompt_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get execution history for a prompt
-
-        Args:
-            prompt_id: Prompt ID from submit_prompt
-
-        Returns:
-            History dict or None if not found
+        Get execution history for a prompt_id.
         """
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.api_url}/history/{prompt_id}",
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status == 200:
                         history = await response.json()
@@ -476,197 +300,155 @@ class ComfyUIService:
         self,
         prompt_id: str,
         timeout: int = 600,
-        poll_interval: int = 2
+        poll_interval: int = 2,
     ) -> Dict[str, Any]:
         """
-        Poll ComfyUI until generation is complete
-
-        Args:
-            prompt_id: Prompt ID from submit_prompt
-            timeout: Max seconds to wait (default 10 minutes)
-            poll_interval: Seconds between polls (default 2s)
-
-        Returns:
-            {
-                "success": bool,
-                "status": "completed" | "failed" | "timeout",
-                "output_images": [{"filename": str, "subfolder": str, "type": str}],
-                "processing_time": float,
-                "error": str (optional)
-            }
+        Poll ComfyUI until generation is complete.
         """
         start_time = time.time()
-
         print(f"   🔄 Polling for completion (prompt_id: {prompt_id[:8]}...)")
 
         while True:
             elapsed = time.time() - start_time
-
             if elapsed > timeout:
                 return {
                     "success": False,
                     "status": "timeout",
-                    "error": f"Generation timed out after {timeout}s"
+                    "error": f"Generation timed out after {timeout}s",
                 }
 
-            # Get history
             history = await self.get_history(prompt_id)
 
             if history:
-                # Check if execution is complete
                 status = history.get("status", {})
-
                 if status.get("completed", False):
-                    # Get output images
                     outputs = history.get("outputs", {})
-                    output_images = []
+                    output_images: List[Dict[str, Any]] = []
 
                     for node_id, node_output in outputs.items():
                         if "images" in node_output:
                             output_images.extend(node_output["images"])
 
                     processing_time = time.time() - start_time
-
-                    print(f"   ✅ Generation complete in {processing_time:.1f}s")
+                    print(
+                        f"   ✅ Generation complete in {processing_time:.1f}s"
+                    )
                     print(f"   Generated {len(output_images)} image(s)")
 
                     return {
                         "success": True,
                         "status": "completed",
                         "output_images": output_images,
-                        "processing_time": processing_time
+                        "processing_time": processing_time,
                     }
 
-                # Check for errors
                 if "error" in status or status.get("status_str") == "error":
                     return {
                         "success": False,
                         "status": "failed",
-                        "error": status.get("error", "Unknown error during generation")
+                        "error": status.get(
+                            "error", "Unknown error during generation"
+                        ),
                     }
 
-            # Wait before next poll
             await asyncio.sleep(poll_interval)
 
     def get_image_url(self, image_info: Dict[str, Any]) -> str:
         """
-        Build image URL from ComfyUI output info
+        Build image URL from ComfyUI output info.
 
-        Args:
-            image_info: {"filename": str, "subfolder": str, "type": str}
-
-        Returns:
-            Full URL to image
+        image_info: {"filename": str, "subfolder": str, "type": str}
         """
         filename = image_info["filename"]
         subfolder = image_info.get("subfolder", "")
         type_folder = image_info.get("type", "output")
 
-        # Build URL
         if subfolder:
-            url = f"{self.api_url}/view?filename={filename}&subfolder={subfolder}&type={type_folder}"
-        else:
-            url = f"{self.api_url}/view?filename={filename}&type={type_folder}"
+            return (
+                f"{self.api_url}/view?filename={filename}"
+                f"&subfolder={subfolder}&type={type_folder}"
+            )
+        return f"{self.api_url}/view?filename={filename}&type={type_folder}"
 
-        return url
-
+    # -------------------------------------------------------------------------
+    # 5. Top-level convenience method
+    # -------------------------------------------------------------------------
     async def generate(
         self,
         character: Dict[str, Any],
-        workflow_path: str = "workflows/qwen/instagram_single.json",
+        workflow_path: str = "workflows/qwen/instagram_api_fast.json",
         input_image_filename: Optional[str] = None,
         prompt_additions: str = "",
         sampler_overrides: Optional[Dict[str, Any]] = None,
-        disable_upscale: bool = False,
-        lora_strength_override: Optional[float] = None
+        lora_strength_override: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Complete generation workflow: load, inject, submit, poll
-
-        Args:
-            character: Character dict with lora_file, trigger_word, etc.
-            workflow_path: Path to workflow JSON
-            input_image_filename: Input image filename (in ComfyUI's input dir)
-            prompt_additions: Additional prompt text
-            sampler_overrides: Override sampler settings {"steps": 15, "cfg": 3.5, "denoise": 0.6, ...}
-            disable_upscale: Skip upscale pass for faster generation (1 image instead of 2)
-            lora_strength_override: Override LoRA strength per-request
-
-        Returns:
-            {
-                "success": bool,
-                "output_url": str,
-                "output_images": list,
-                "processing_time": float,
-                "prompt_id": str,
-                "error": str (optional)
-            }
+        Complete generation workflow: load API prompt, inject values,
+        submit, poll, and return image URLs.
         """
         try:
-            print(f"🎨 Starting ComfyUI generation")
+            print("🎨 Starting ComfyUI generation")
             print(f"   Character: {character.get('name', character.get('id'))}")
             print(f"   Workflow: {workflow_path}")
 
-            # 1. Load workflow
-            workflow = self.load_workflow(workflow_path)
+            # 1. Load API-format prompt (exactly what the UI uses)
+            prompt = self.load_api_prompt(workflow_path)
 
             # 2. Inject LoRA
             if lora_file := character.get("lora_file"):
-                lora_strength = lora_strength_override if lora_strength_override is not None else character.get("lora_strength", 0.8)
-                workflow = self.inject_lora(workflow, lora_file, lora_strength)
+                lora_strength = (
+                    lora_strength_override
+                    if lora_strength_override is not None
+                    else character.get("lora_strength", 0.8)
+                )
+                self.api_inject_lora(prompt, lora_file, lora_strength)
 
-            # 3. Build and inject prompt
-            positive_prompt = self.build_prompt_from_character(character, prompt_additions)
-            workflow = self.inject_prompt(workflow, positive_prompt)
+            # 3. Build positive/negative prompts and inject
+            positive_prompt = self.build_prompt_from_character(
+                character, prompt_additions
+            )
+            negative_prompt = (
+                "blurry, low quality, distorted, deformed, disfigured"
+            )
+            self.api_inject_prompts(prompt, positive_prompt, negative_prompt)
 
-            # 4. Inject input image (if provided)
-            if input_image_filename:
-                workflow = self.inject_input_image(workflow, input_image_filename)
+            # 4. Inject or switch image latent
+            self.api_inject_input_image(prompt, input_image_filename)
 
-            # 5. Apply sampler overrides (steps, cfg, denoise, etc.)
+            # 5. Apply sampler overrides (steps, cfg, etc.) if provided
             if sampler_overrides:
-                workflow = self.apply_sampler_overrides(workflow, sampler_overrides)
+                self.api_apply_sampler_overrides(prompt, sampler_overrides)
 
-            # 6. Disable upscale if requested (for 1 image instead of 2)
-            if disable_upscale:
-                for node in workflow.get("nodes", []):
-                    # Disable upscale sampler (node 79) and upscale node (node 78)
-                    if node.get("id") in [78, 79]:  # LatentUpscaleBy and second KSampler
-                        node["disabled"] = True
-                        print(f"   ✓ Disabled node {node.get('id')} ({node.get('type')}) for fast mode")
-
-            # 5. Submit to ComfyUI
-            print(f"   📤 Submitting to ComfyUI...")
-            submit_result = await self.submit_prompt(workflow)
-
+            # 6. Submit to ComfyUI
+            print("   📤 Submitting to ComfyUI...")
+            submit_result = await self.submit_prompt(prompt)
             if not submit_result["success"]:
                 return submit_result
 
             prompt_id = submit_result["prompt_id"]
             print(f"   ✓ Submitted (prompt_id: {prompt_id[:8]}...)")
 
-            # 6. Poll for completion
+            # 7. Poll for completion
             poll_result = await self.poll_for_completion(prompt_id)
-
             if not poll_result["success"]:
                 return poll_result
 
-            # 7. Build output URLs
+            # 8. Build output URLs
             output_images = poll_result["output_images"]
             output_urls = [self.get_image_url(img) for img in output_images]
 
+            # If multiple images for some reason, keep the last one as "primary"
+            primary_url = output_urls[-1] if output_urls else None
+
             return {
                 "success": True,
-                "output_url": output_urls[0] if output_urls else None,
+                "output_url": primary_url,
                 "output_urls": output_urls,
                 "output_images": output_images,
                 "processing_time": poll_result["processing_time"],
-                "prompt_id": prompt_id
+                "prompt_id": prompt_id,
             }
 
         except Exception as e:
             print(f"   ❌ Generation failed: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}

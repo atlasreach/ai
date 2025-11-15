@@ -15,9 +15,10 @@ from services.comfyui_service import ComfyUIService
 async def test_full_generation():
     """
     Full end-to-end test: Submit job → Poll → Get image
+    Using new API-format workflow (only 1 image output)
     """
     print("=" * 70)
-    print("🎨 FULL GENERATION TEST - End to End")
+    print("🎨 FULL GENERATION TEST - End to End (API Format)")
     print("=" * 70)
 
     service = ComfyUIService()
@@ -44,27 +45,30 @@ async def test_full_generation():
     print(f"   ComfyUI: {service.api_url}")
 
     try:
-        # Fast generation settings
+        # Settings from known good output: /workspaces/ai/outputs/milan/20251113_141359/metadata.json
         sampler_overrides = {
-            "steps": 15,           # Faster (was 30)
-            "cfg": 3.5,            # Guidance
-            "denoise": 0.65,       # img2img strength
+            "steps": 30,           # From known good output
+            "cfg": 4.0,            # From known good output
+            "denoise": 0.85,       # From known good output (strength parameter)
             "seed": 123456         # Reproducible
         }
 
-        print(f"\n🚀 Starting generation...")
-        print(f"   Prompt additions: 'professional photo, smiling, elegant pose'")
+        # Exact prompt from known good output
+        known_good_prompt = "woman with long straight brunette hair, tan skin, fully nude, standing and leaning forward with her upper body resting on a light-colored cushioned chair, back arched, buttocks prominently displayed, left hand resting on the back of the chair, right hand not visible, tongue sticking out playfully, bright and colorful lighting with blue and white tones from the background"
+
+        print(f"\n🚀 Starting generation with KNOWN GOOD settings...")
+        print(f"   Using settings from: /workspaces/ai/outputs/milan/20251113_141359/metadata.json")
+        print(f"   Workflow: API format (single output)")
+        print(f"   Prompt: {known_good_prompt[:80]}...")
         print(f"   Overrides: {sampler_overrides}")
-        print(f"   Fast mode: 1 image only (no upscale)")
 
         result = await service.generate(
             character=test_character,
-            workflow_path="workflows/qwen/instagram_single.json",
+            workflow_path="workflows/qwen/instagram_api_prompt.json",  # New API format workflow
             input_image_filename="22.jpg",  # Uploaded test image
-            prompt_additions="professional photo, smiling, elegant pose",
+            prompt_additions=known_good_prompt,
             sampler_overrides=sampler_overrides,
-            disable_upscale=True,  # Skip upscale for speed
-            lora_strength_override=0.7  # Per-request override
+            lora_strength_override=0.8  # From known good output
         )
 
         print("\n" + "=" * 70)
@@ -101,62 +105,58 @@ async def test_full_generation():
         traceback.print_exc()
         return False
 
-async def test_with_status_polling():
+async def test_with_simple_prompt():
     """
-    Test job submission and manual status polling
+    Test with simpler prompt (no long description)
     """
     print("\n" + "=" * 70)
-    print("🔄 STATUS POLLING TEST - Submit and Check Status Manually")
+    print("🔄 SIMPLE PROMPT TEST - Quick Generation")
     print("=" * 70)
 
     service = ComfyUIService()
 
-    # Minimal test
+    # Minimal test character
     test_character = {
+        "id": "milan",
+        "name": "Milan",
         "trigger_word": "milan",
         "lora_file": "milan_000002000.safetensors",
         "lora_strength": 0.8,
-        "character_constraints": {"constants": []}
+        "character_constraints": {
+            "constants": [
+                {"key": "hair", "value": "blonde hair", "type": "physical"},
+                {"key": "eyes", "value": "blue eyes", "type": "physical"}
+            ]
+        }
     }
 
     try:
-        # Load and prepare workflow
-        print("\n1️⃣  Loading workflow...")
-        workflow = service.load_workflow("workflows/qwen/instagram_single.json")
+        # Simpler settings for faster test
+        sampler_overrides = {
+            "steps": 20,           # Fewer steps for speed
+            "cfg": 4.0,
+            "denoise": 0.85,
+            "seed": 789
+        }
 
-        print("2️⃣  Injecting parameters...")
-        workflow = service.inject_lora(workflow, test_character["lora_file"], test_character["lora_strength"])
-        workflow = service.inject_input_image(workflow, "22.jpg")
+        print("\n🚀 Starting simple generation...")
+        result = await service.generate(
+            character=test_character,
+            workflow_path="workflows/qwen/instagram_api_prompt.json",
+            input_image_filename="22.jpg",
+            prompt_additions="professional photo, elegant pose, soft lighting",
+            sampler_overrides=sampler_overrides,
+            lora_strength_override=0.8
+        )
 
-        prompt = "milan, woman with blonde hair, professional photo"
-        workflow = service.inject_prompt(workflow, prompt)
-
-        print("3️⃣  Submitting to ComfyUI...")
-        submit_result = await service.submit_prompt(workflow)
-
-        if not submit_result["success"]:
-            print(f"❌ Submit failed: {submit_result.get('error')}")
-            return False
-
-        prompt_id = submit_result["prompt_id"]
-        print(f"✅ Submitted! Prompt ID: {prompt_id}")
-
-        print("\n4️⃣  Polling for completion...")
-        poll_result = await service.poll_for_completion(prompt_id, timeout=300)
-
-        if poll_result["success"]:
+        if result["success"]:
             print(f"\n✅ Completed!")
-            print(f"   Status: {poll_result['status']}")
-            print(f"   Processing Time: {poll_result.get('processing_time', 0):.1f}s")
-            print(f"   Output Images: {len(poll_result.get('output_images', []))}")
-
-            for img_info in poll_result.get('output_images', []):
-                url = service.get_image_url(img_info)
-                print(f"   Image URL: {url}")
-
+            print(f"   Processing Time: {result.get('processing_time', 0):.1f}s")
+            print(f"   Output Images: {len(result.get('output_images', []))}")
+            print(f"   Primary URL: {result.get('output_url')}")
             return True
         else:
-            print(f"\n❌ Failed: {poll_result.get('error')}")
+            print(f"\n❌ Failed: {result.get('error')}")
             return False
 
     except Exception as e:
@@ -177,11 +177,11 @@ async def main():
     print("    2. The LoRA file (milan_000002000.safetensors) exists in ComfyUI's loras/ folder")
     print("    3. The Qwen models are loaded in ComfyUI")
 
-    # Test 1: Full generation
+    # Test 1: Full generation with known good settings
     test1_result = await test_full_generation()
 
-    # Test 2: Manual status polling
-    test2_result = await test_with_status_polling()
+    # Test 2: Simple prompt test
+    test2_result = await test_with_simple_prompt()
 
     # Summary
     print("\n" + "=" * 70)

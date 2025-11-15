@@ -18,3 +18,6 @@ websockets==12.0
 
 # Image Processing (for future face swap preprocessing)
 Pillow==10.1.0
+
+# Training & Model Hub
+huggingface-hub==0.20.0
