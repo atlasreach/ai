@@ -551,10 +551,12 @@ log_with = "tensorboard"
             current_step = 0
 
             # Try to find step count in various formats
+            # Kohya FLUX logs format: "steps: 29%|██▉ | 580/2000 [17:24<42:37, 1.80s/it]"
             step_patterns = [
-                r'steps?:\s*(\d+)/(\d+)',
-                r'step\s+(\d+)',
-                r'Steps:\s*(\d+)',
+                r'\|\s*(\d+)/(\d+)\s*\[',  # Match "| 580/2000 [" format (most reliable)
+                r'steps?:\s*(\d+)/(\d+)',   # Match "steps: 580/2000" (fallback)
+                r'step\s+(\d+)',             # Match "step 580" (generic)
+                r'Steps:\s*(\d+)',           # Match "Steps: 580" (generic)
             ]
 
             for pattern in step_patterns:
