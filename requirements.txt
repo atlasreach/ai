@@ -5,6 +5,7 @@ pydantic==2.5.0
 
 # Database
 psycopg2-binary==2.9.9
+supabase==2.0.3
 
 # Cloud Services
 boto3==1.29.7
@@ -21,3 +22,6 @@ Pillow==10.1.0
 
 # Training & Model Hub
 huggingface-hub==0.20.0
+
+# Instagram Scraping
+instaloader==4.10.3

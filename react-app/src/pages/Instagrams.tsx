@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Instagram, Plus, Heart, MessageCircle, Eye, Grid3X3, ChevronLeft, ChevronRight, Star, Trash2, Loader, X, Play } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+// import { supabase } from '../lib/supabase'; // Not currently used
 
 const API_BASE = window.location.hostname === 'localhost'
   ? 'http://localhost:8002'
-  : `https://vigilant-rotary-phone-7v5g5q99jpjjfw57w-8002.app.github.dev`;
+  : `https://${window.location.hostname.replace('5173', '8002')}`;
 
 interface InstagramAccount {
   id: string;
@@ -16,6 +16,8 @@ interface InstagramAccount {
   is_favorite: boolean;
   posts_count: number;
   tags: string[];
+  model_id?: string;
+  model_name?: string;
 }
 
 interface InstagramPost {
@@ -23,12 +25,21 @@ interface InstagramPost {
   post_type: string;
   display_url: string;
   media_urls: string[];
+  video_url?: string;
   caption: string;
   likes_count: number;
   comments_count: number;
   views_count: number;
   post_url: string;
   posted_at: string;
+}
+
+interface Model {
+  id: string;
+  name: string;
+  first_name?: string;
+  last_name?: string;
+  thumbnail_url?: string;
 }
 
 export default function Instagrams() {
@@ -43,10 +54,23 @@ export default function Instagrams() {
   const [isScraping, setIsScraping] = useState(false);
   const [carouselModal, setCarouselModal] = useState<{ post: InstagramPost; index: number } | null>(null);
   const [videoModal, setVideoModal] = useState<InstagramPost | null>(null);
+  const [models, setModels] = useState<Model[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
 
   useEffect(() => {
     loadAccounts();
+    loadModels();
   }, []);
+
+  const loadModels = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/persona/models`);
+      const data = await response.json();
+      setModels(data);
+    } catch (error) {
+      console.error('Error loading models:', error);
+    }
+  };
 
   const loadAccounts = async () => {
     setIsLoading(true);
@@ -97,9 +121,26 @@ export default function Instagrams() {
 
       const data = await response.json();
       if (data.success) {
-        alert(data.message);
+        // If a model was selected, link it
+        if (selectedModelId) {
+          try {
+            await fetch(`${API_BASE}/api/persona/models/${selectedModelId}/link-instagram`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ instagram_account_id: data.account_id }),
+            });
+            alert(`✅ ${data.message}\n\nLinked to model successfully!`);
+          } catch (linkError) {
+            console.error('Error linking model:', linkError);
+            alert(`✅ ${data.message}\n\n⚠️ But failed to link model`);
+          }
+        } else {
+          alert(data.message);
+        }
+
         setShowScrapeModal(false);
         setScrapeUsername('');
+        setSelectedModelId('');
         await loadAccounts();
       } else {
         alert('Failed to scrape: ' + (data.detail || 'Unknown error'));
@@ -229,6 +270,11 @@ export default function Instagrams() {
                         @{account.username}
                       </h3>
                       <p className="text-sm text-slate-400">{account.full_name || account.username}</p>
+                      {account.model_name && (
+                        <p className="text-xs text-pink-400 mt-1">
+                          Linked to: {account.model_name}
+                        </p>
+                      )}
                     </div>
                     {account.is_favorite && (
                       <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
@@ -385,6 +431,29 @@ export default function Instagrams() {
                     autoFocus
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Link to Model (Optional)
+                </label>
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                >
+                  <option value="">No Model (Just Scrape)</option>
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.first_name && model.last_name
+                        ? `${model.first_name} ${model.last_name}`
+                        : model.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-400 mt-1">
+                  Link this Instagram account to a model for training
+                </p>
               </div>
 
               <div>

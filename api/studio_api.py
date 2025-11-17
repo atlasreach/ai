@@ -767,6 +767,14 @@ try:
 except Exception as e:
     print(f"⚠️  Persona System API not available: {e}")
 
+# Import and mount Cleanup API
+try:
+    from api.cleanup_api import router as cleanup_router
+    app.include_router(cleanup_router)
+    print("✅ Cleanup API mounted")
+except Exception as e:
+    print(f"⚠️  Cleanup API not available: {e}")
+
 # ============================================================================
 # MAIN
 # ============================================================================

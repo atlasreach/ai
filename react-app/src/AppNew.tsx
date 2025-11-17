@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Database, Image, Sparkles, Settings, Instagram } from 'lucide-react';
 import ModelManager from './pages/ModelManagerNew';
-import DatasetCreator from './pages/DatasetCreatorNew';
+import Datasets from './pages/DatasetsNew';
 import ContentProduction from './pages/ContentProduction';
 import Instagrams from './pages/Instagrams';
 
@@ -9,32 +9,21 @@ type Page = 'models' | 'datasets' | 'production' | 'instagrams' | 'settings';
 
 export default function AppNew() {
   const [currentPage, setCurrentPage] = useState<Page>('models');
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
 
   const navigation = [
     { id: 'models' as Page, name: 'Model Manager', icon: Database, description: 'Manage your AI models' },
-    { id: 'datasets' as Page, name: 'Dataset Creator', icon: Image, description: 'Create training datasets' },
+    { id: 'datasets' as Page, name: 'Datasets', icon: Image, description: 'Training & content datasets' },
     { id: 'instagrams' as Page, name: 'Instagram Library', icon: Instagram, description: 'Scrape & manage Instagram accounts' },
     { id: 'production' as Page, name: 'Content Production', icon: Sparkles, description: 'Generate content' },
     { id: 'settings' as Page, name: 'Settings', icon: Settings, description: 'Configure your workspace' },
   ];
-
-  const handleNavigateToDataset = (datasetId: string) => {
-    setSelectedDatasetId(datasetId);
-    setCurrentPage('datasets');
-  };
-
-  const handleNavigateToDatasets = () => {
-    setSelectedDatasetId(null); // Clear selection when navigating to create new
-    setCurrentPage('datasets');
-  };
 
   const renderPage = () => {
     switch (currentPage) {
       case 'models':
         return <ModelManager />;
       case 'datasets':
-        return <DatasetCreator viewDatasetId={selectedDatasetId} />;
+        return <Datasets />;
       case 'instagrams':
         return <Instagrams />;
       case 'production':

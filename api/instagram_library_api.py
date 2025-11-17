@@ -45,9 +45,37 @@ class UpdateAccountRequest(BaseModel):
 # ============================================================================
 
 def scrape_account_background(username: str, num_posts: int):
-    """Background task to scrape Instagram account"""
+    """Background task to scrape Instagram account using Instaloader"""
     try:
-        print(f"\n🔄 Background scraping started for @{username}")
+        print(f"\n🔄 Background scraping started for @{username} (using Instaloader)")
+
+        # Import the instaloader scraper
+        from api.instagram_scraper_instaloader import scrape_instagram_account
+
+        # Run the scraper
+        account_id, posts_scraped = scrape_instagram_account(username, num_posts)
+
+        print(f"✅ Scraping complete for @{username}: {posts_scraped} posts")
+        return
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Scraping failed for @{username}: {error_message}")
+
+        # Update account with error status
+        try:
+            supabase.table('instagram_accounts').update({
+                'scrape_status': 'error',
+                'notes': f"Scraping failed: {error_message[:200]}"
+            }).eq('username', username).execute()
+        except:
+            pass
+
+
+def scrape_account_background_apify(username: str, num_posts: int):
+    """Background task to scrape Instagram account using Apify (LEGACY - kept as fallback)"""
+    try:
+        print(f"\n🔄 Background scraping started for @{username} (using Apify)")
 
         # Update account status to 'scraping'
         supabase.table('instagram_accounts')\
@@ -64,13 +92,21 @@ def scrape_account_background(username: str, num_posts: int):
         profile_response = req.post(apify_url, json={
             "directUrls": [f"https://www.instagram.com/{username}/"],
             "resultsType": "details",
-            "resultsLimit": 1
+            "resultsLimit": 1,
+            "addParentData": False
         }, timeout=180)
 
         if profile_response.status_code not in [200, 201]:
+            print(f"❌ Profile scrape failed with status {profile_response.status_code}")
+            print(f"Response: {profile_response.text[:500]}")
             raise Exception(f"Profile scrape failed: {profile_response.status_code}")
 
-        profile = profile_response.json()[0]
+        profile_data = profile_response.json()
+        if not profile_data or len(profile_data) == 0:
+            print(f"❌ No profile data returned from Apify")
+            raise Exception(f"Instagram account @{username} not found or is private")
+
+        profile = profile_data[0]
         print(f"✓ Profile: {profile.get('fullName')}, {profile.get('followersCount'):,} followers")
 
         # Download profile picture
@@ -92,13 +128,20 @@ def scrape_account_background(username: str, num_posts: int):
         posts_response = req.post(apify_url, json={
             "directUrls": [f"https://www.instagram.com/{username}/"],
             "resultsType": "posts",
-            "resultsLimit": num_posts
+            "resultsLimit": num_posts,
+            "addParentData": False
         }, timeout=180)
 
         if posts_response.status_code not in [200, 201]:
+            print(f"❌ Posts scrape failed with status {posts_response.status_code}")
+            print(f"Response: {posts_response.text[:500]}")
             raise Exception(f"Posts scrape failed: {posts_response.status_code}")
 
         posts = posts_response.json()
+        if not posts or len(posts) == 0:
+            print(f"❌ No posts returned from Apify")
+            raise Exception(f"No posts found for @{username} or account is private")
+
         print(f"✓ Received {len(posts)} posts")
 
         # Helper function to upload images
@@ -146,7 +189,17 @@ def scrape_account_background(username: str, num_posts: int):
                 'posted_at': post.get('timestamp'),
                 'metadata': {'product_type': post.get('productType'), 'is_sponsored': post.get('isSponsored', False)}
             }
-            supabase.table('instagram_posts').upsert(post_data, on_conflict='instagram_id').execute()
+            try:
+                # Check if post already exists
+                existing = supabase.table('instagram_posts').select('id').eq('instagram_id', post_id).execute()
+                if existing.data:
+                    # Update existing post
+                    supabase.table('instagram_posts').update(post_data).eq('instagram_id', post_id).execute()
+                else:
+                    # Insert new post
+                    supabase.table('instagram_posts').insert(post_data).execute()
+            except Exception as e:
+                print(f"❌ Error saving post {idx}: {e}")
 
         # Update account with final data
         supabase.table('instagram_accounts').update({
@@ -167,8 +220,14 @@ def scrape_account_background(username: str, num_posts: int):
         print(f"✅ Scraping complete for @{username}")
 
     except Exception as e:
-        print(f"❌ Background scraping failed for @{username}: {e}")
-        supabase.table('instagram_accounts').update({'scrape_status': 'error'}).eq('username', username).execute()
+        error_message = str(e)
+        print(f"❌ Background scraping failed for @{username}: {error_message}")
+
+        # Update account with error status and message
+        supabase.table('instagram_accounts').update({
+            'scrape_status': 'error',
+            'notes': f"Scraping failed: {error_message[:200]}"
+        }).eq('username', username).execute()
 
 # ============================================================================
 # ENDPOINTS
@@ -177,7 +236,7 @@ def scrape_account_background(username: str, num_posts: int):
 @router.get("/accounts")
 async def list_accounts():
     """
-    Get all scraped Instagram accounts
+    Get all scraped Instagram accounts with linked model info
     """
     try:
         result = supabase.table('instagram_accounts')\
@@ -187,10 +246,29 @@ async def list_accounts():
 
         accounts = result.data or []
 
-        # Transform to include post count
+        # Transform to include post count and model name
         for account in accounts:
             post_count_data = account.pop('post_count', [])
             account['posts_count'] = len(post_count_data) if post_count_data else 0
+
+            # Get linked model name if model_id exists
+            model_id = account.get('model_id')
+            if model_id:
+                try:
+                    model_result = supabase.table('models')\
+                        .select('name')\
+                        .eq('id', model_id)\
+                        .single()\
+                        .execute()
+
+                    if model_result.data:
+                        account['model_name'] = model_result.data['name']
+                    else:
+                        account['model_name'] = None
+                except:
+                    account['model_name'] = None
+            else:
+                account['model_name'] = None
 
         return {
             "success": True,
@@ -505,12 +583,18 @@ async def scrape_account_sync(request: ScrapeAccountRequest):
 
             # Insert or update post
             try:
-                result = supabase.table('instagram_posts')\
-                    .upsert(post_data, on_conflict='instagram_id')\
-                    .execute()
+                # Check if post already exists
+                existing = supabase.table('instagram_posts').select('id').eq('instagram_id', post.get('id')).execute()
+                if existing.data:
+                    # Update existing post
+                    result = supabase.table('instagram_posts').update(post_data).eq('instagram_id', post.get('id')).execute()
+                else:
+                    # Insert new post
+                    result = supabase.table('instagram_posts').insert(post_data).execute()
                 saved_posts.append(result.data[0] if result.data else post_data)
+                print(f"    ✓ Saved post {idx}/{len(posts)}")
             except Exception as e:
-                print(f"Error saving post {post.get('id')}: {e}")
+                print(f"❌ Error saving post {post.get('id')}: {e}")
                 continue
 
         return {
