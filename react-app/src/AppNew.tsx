@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Database, Image, Sparkles, Settings, Instagram } from 'lucide-react';
-import ModelManager from './pages/ModelManager';
+import ModelManager from './pages/ModelManagerNew';
 import DatasetCreator from './pages/DatasetCreatorNew';
 import ContentProduction from './pages/ContentProduction';
 import Instagrams from './pages/Instagrams';
@@ -32,12 +32,7 @@ export default function AppNew() {
   const renderPage = () => {
     switch (currentPage) {
       case 'models':
-        return (
-          <ModelManager
-            onNavigateToDatasets={handleNavigateToDatasets}
-            onNavigateToDataset={handleNavigateToDataset}
-          />
-        );
+        return <ModelManager />;
       case 'datasets':
         return <DatasetCreator viewDatasetId={selectedDatasetId} />;
       case 'instagrams':
@@ -47,12 +42,7 @@ export default function AppNew() {
       case 'settings':
         return <div className="text-gray-400">Settings coming soon...</div>;
       default:
-        return (
-          <ModelManager
-            onNavigateToDatasets={handleNavigateToDatasets}
-            onNavigateToDataset={handleNavigateToDataset}
-          />
-        );
+        return <ModelManager />;
     }
   };
 

@@ -759,6 +759,14 @@ try:
 except Exception as e:
     print(f"⚠️  Instagram Library API not available: {e}")
 
+# Import and mount Persona System API
+try:
+    from api.persona_api import router as persona_router
+    app.include_router(persona_router)
+    print("✅ Persona System API mounted")
+except Exception as e:
+    print(f"⚠️  Persona System API not available: {e}")
+
 # ============================================================================
 # MAIN
 # ============================================================================
