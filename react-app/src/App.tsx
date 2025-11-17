@@ -4,6 +4,7 @@ import Tools from './pages/Tools'
 import Generations from './pages/Generations'
 import DatasetCreator from './pages/DatasetCreator'
 import Training from './pages/Training'
+import Instagrams from './pages/Instagrams'
 import './App.css'
 
 function Navigation() {
@@ -71,6 +72,16 @@ function Navigation() {
               >
                 🚀 Training
               </Link>
+              <Link
+                to="/instagrams"
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  isActive('/instagrams')
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
+                }`}
+              >
+                📸 Instagrams
+              </Link>
             </div>
           </div>
 
@@ -98,6 +109,7 @@ function App() {
             <Route path="/generations" element={<Generations />} />
             <Route path="/dataset-creator" element={<DatasetCreator />} />
             <Route path="/training" element={<Training />} />
+            <Route path="/instagrams" element={<Instagrams />} />
           </Routes>
         </main>
       </div>

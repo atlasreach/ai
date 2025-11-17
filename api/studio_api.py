@@ -743,6 +743,22 @@ try:
 except Exception as e:
     print(f"⚠️  Training API not available: {e}")
 
+# Import and mount model API router (new schema)
+try:
+    from api.model_api import router as model_router
+    app.include_router(model_router)
+    print("✅ Model API mounted")
+except Exception as e:
+    print(f"⚠️  Model API not available: {e}")
+
+# Import and mount Instagram library API
+try:
+    from api.instagram_library_api import router as instagram_router
+    app.include_router(instagram_router)
+    print("✅ Instagram Library API mounted")
+except Exception as e:
+    print(f"⚠️  Instagram Library API not available: {e}")
+
 # ============================================================================
 # MAIN
 # ============================================================================

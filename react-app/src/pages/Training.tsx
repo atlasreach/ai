@@ -15,7 +15,15 @@ interface Dataset {
   runpod_job_id?: string;
   huggingface_url?: string;
   lora_download_url?: string;
+  validation_prompts?: string[];
   created_at: string;
+}
+
+interface TrainingImage {
+  id: string;
+  image_url: string;
+  caption: string;
+  display_order: number;
 }
 
 interface TrainingConfig {
@@ -29,6 +37,7 @@ interface TrainingConfig {
 export default function Training() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
+  const [trainingImages, setTrainingImages] = useState<TrainingImage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   // Training config
@@ -58,6 +67,15 @@ export default function Training() {
     return () => clearInterval(intervalId);
   }, []);
 
+  // Load training images when dataset is selected
+  useEffect(() => {
+    if (selectedDataset) {
+      loadTrainingImages(selectedDataset.id);
+    } else {
+      setTrainingImages([]);
+    }
+  }, [selectedDataset]);
+
   // Poll for training status
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -82,6 +100,18 @@ export default function Training() {
 
     if (data && !error) {
       setDatasets(data);
+    }
+  };
+
+  const loadTrainingImages = async (datasetId: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/datasets/${datasetId}/images`);
+      const data = await response.json();
+      if (data.success) {
+        setTrainingImages(data.images || []);
+      }
+    } catch (err) {
+      console.error('Failed to load training images:', err);
     }
   };
 
@@ -306,7 +336,42 @@ export default function Training() {
                       <div className="font-bold">{selectedDataset.training_progress || 0}%</div>
                     </div>
                   </div>
+
+                  {/* Validation Prompts */}
+                  {selectedDataset.validation_prompts && selectedDataset.validation_prompts.length > 0 && (
+                    <div className="mt-4 p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                      <div className="text-sm font-semibold mb-2">🎯 Validation Prompts:</div>
+                      <div className="space-y-1">
+                        {selectedDataset.validation_prompts.map((prompt, idx) => (
+                          <div key={idx} className="text-xs text-gray-300">• {prompt}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
+
+                {/* Training Images Gallery */}
+                {trainingImages.length > 0 && (
+                  <details className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 border border-purple-500/20 shadow-2xl">
+                    <summary className="text-xl font-bold mb-4 cursor-pointer hover:text-purple-400 transition">
+                      📸 Training Images ({trainingImages.length})
+                    </summary>
+                    <div className="mt-4 grid grid-cols-2 gap-4 max-h-[500px] overflow-y-auto">
+                      {trainingImages.map((img) => (
+                        <div key={img.id} className="bg-slate-900/50 rounded-lg overflow-hidden border border-gray-700">
+                          <img
+                            src={img.image_url}
+                            alt={`Training ${img.display_order}`}
+                            className="w-full aspect-square object-cover"
+                          />
+                          <div className="p-3">
+                            <p className="text-xs text-gray-300 line-clamp-3">{img.caption}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
 
                 {/* Training Config */}
                 {(!selectedDataset.training_status || selectedDataset.training_status === 'not_started' || selectedDataset.training_status === 'failed') && (
