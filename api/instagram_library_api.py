@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 import sys
+import json
 import requests as req
 from datetime import datetime
 
@@ -45,17 +46,14 @@ class UpdateAccountRequest(BaseModel):
 # ============================================================================
 
 def scrape_account_background(username: str, num_posts: int):
-    """Background task to scrape Instagram account using Instaloader"""
+    """Background task to scrape Instagram account using Apify"""
     try:
-        print(f"\n🔄 Background scraping started for @{username} (using Instaloader)")
+        print(f"\n🔄 Background scraping started for @{username} (using Apify)")
 
-        # Import the instaloader scraper
-        from api.instagram_scraper_instaloader import scrape_instagram_account
+        # Use Apify scraper instead
+        scrape_account_background_apify(username, num_posts)
 
-        # Run the scraper
-        account_id, posts_scraped = scrape_instagram_account(username, num_posts)
-
-        print(f"✅ Scraping complete for @{username}: {posts_scraped} posts")
+        print(f"✅ Scraping complete for @{username}")
         return
 
     except Exception as e:
@@ -304,10 +302,19 @@ async def get_account_detail(account_id: str):
             .order('posted_at', desc=True)\
             .execute()
 
+        # Parse media_urls from JSON string to array
+        posts = posts_result.data or []
+        for post in posts:
+            if 'media_urls' in post and isinstance(post['media_urls'], str):
+                try:
+                    post['media_urls'] = json.loads(post['media_urls'])
+                except:
+                    post['media_urls'] = []
+
         return {
             "success": True,
             "account": account_result.data,
-            "posts": posts_result.data or []
+            "posts": posts
         }
 
     except HTTPException:

@@ -187,6 +187,23 @@ async def delete_dataset(dataset_id: str):
 # DATASET IMAGES
 # ============================================================
 
+@router.get("/{dataset_id}/images")
+async def get_dataset_images(dataset_id: str):
+    """Get all images in a dataset"""
+    try:
+        result = supabase.table('dataset_images')\
+            .select('*')\
+            .eq('dataset_id', dataset_id)\
+            .order('created_at')\
+            .execute()
+
+        return result.data or []
+
+    except Exception as e:
+        print(f"Error getting dataset images: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/{dataset_id}/images")
 async def add_image_to_dataset(dataset_id: str, image: DatasetImageAdd):
     """Add an image to a dataset"""
@@ -287,6 +304,28 @@ async def remove_image_from_dataset(dataset_id: str, image_id: str):
         raise
     except Exception as e:
         print(f"Error removing image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/{dataset_id}/images/{image_id}")
+async def update_dataset_image(dataset_id: str, image_id: str, data: dict):
+    """Update an image's caption or other fields"""
+    try:
+        result = supabase.table('dataset_images')\
+            .update(data)\
+            .eq('id', image_id)\
+            .eq('dataset_id', dataset_id)\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        return {"success": True, "data": result.data[0]}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating image: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

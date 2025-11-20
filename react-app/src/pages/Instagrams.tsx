@@ -62,6 +62,30 @@ export default function Instagrams() {
     loadModels();
   }, []);
 
+  // Keyboard navigation for carousel modal
+  useEffect(() => {
+    if (!carouselModal) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCarouselModal(null);
+      } else if (e.key === 'ArrowLeft' && carouselModal.index > 0) {
+        setCarouselModal({
+          ...carouselModal,
+          index: carouselModal.index - 1,
+        });
+      } else if (e.key === 'ArrowRight' && carouselModal.index < carouselModal.post.media_urls.length - 1) {
+        setCarouselModal({
+          ...carouselModal,
+          index: carouselModal.index + 1,
+        });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [carouselModal]);
+
   const loadModels = async () => {
     try {
       const response = await fetch(`${API_BASE}/api/persona/models`);
@@ -346,13 +370,22 @@ export default function Instagrams() {
                 <div
                   key={post.id}
                   onClick={() => {
+                    console.log('Clicked post:', post.post_type, post.display_url);
+                    console.log('Media URLs:', post.media_urls);
+
                     // Open video modal for videos
                     if (post.post_type === 'Video' && post.video_url) {
                       setVideoModal(post);
                     }
-                    // Open carousel modal if it's a carousel with multiple images
-                    else if (post.post_type === 'Sidecar' && post.media_urls && post.media_urls.length > 1) {
-                      setCarouselModal({ post, index: 0 });
+                    // Open carousel modal for carousels and single images
+                    else {
+                      // For carousel posts, use media_urls
+                      // For single image posts, create array with display_url
+                      const images = (post.post_type === 'Sidecar' && post.media_urls && post.media_urls.length > 0)
+                        ? post.media_urls
+                        : [post.display_url];
+                      console.log('Opening modal with images:', images);
+                      setCarouselModal({ post: { ...post, media_urls: images }, index: 0 });
                     }
                   }}
                   className="relative aspect-square group cursor-pointer overflow-hidden bg-slate-800"
@@ -496,70 +529,111 @@ export default function Instagrams() {
 
       {/* Carousel Modal */}
       {carouselModal && (
-        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
+        <div
+          className="fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"
+          onClick={(e) => {
+            // Close modal when clicking on backdrop
+            if (e.target === e.currentTarget) {
+              setCarouselModal(null);
+            }
+          }}
+        >
           {/* Close button */}
           <button
             onClick={() => setCarouselModal(null)}
-            className="absolute top-4 right-4 p-2 text-white hover:bg-white/10 rounded-lg transition-colors"
+            className="absolute top-4 right-4 p-3 text-white hover:bg-white/20 rounded-full transition-colors z-10 backdrop-blur-sm bg-black/30"
           >
             <X className="w-6 h-6" />
           </button>
 
-          {/* Image container */}
-          <div className="relative max-w-4xl w-full aspect-square">
-            <img
-              src={carouselModal.post.media_urls[carouselModal.index]}
-              alt={`Image ${carouselModal.index + 1} of ${carouselModal.post.media_urls.length}`}
-              className="w-full h-full object-contain"
-            />
+          {/* Main content container */}
+          <div className="relative w-full h-full flex flex-col items-center justify-center max-w-7xl">
+            {/* Image container */}
+            <div className="relative flex-1 flex items-center justify-center w-full">
+              <img
+                src={carouselModal.post.media_urls[carouselModal.index]}
+                alt={`Image ${carouselModal.index + 1} of ${carouselModal.post.media_urls.length}`}
+                className="max-h-[85vh] max-w-full object-contain rounded-lg"
+              />
 
-            {/* Navigation buttons */}
-            {carouselModal.post.media_urls.length > 1 && (
-              <>
-                {/* Left arrow */}
-                {carouselModal.index > 0 && (
-                  <button
-                    onClick={() =>
-                      setCarouselModal({
-                        ...carouselModal,
-                        index: carouselModal.index - 1,
-                      })
-                    }
-                    className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
-                  >
-                    <ChevronLeft className="w-6 h-6" />
-                  </button>
-                )}
+              {/* Navigation buttons */}
+              {carouselModal.post.media_urls.length > 1 && (
+                <>
+                  {/* Left arrow */}
+                  {carouselModal.index > 0 && (
+                    <button
+                      onClick={() =>
+                        setCarouselModal({
+                          ...carouselModal,
+                          index: carouselModal.index - 1,
+                        })
+                      }
+                      className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors backdrop-blur-sm"
+                    >
+                      <ChevronLeft className="w-8 h-8" />
+                    </button>
+                  )}
 
-                {/* Right arrow */}
-                {carouselModal.index < carouselModal.post.media_urls.length - 1 && (
-                  <button
-                    onClick={() =>
-                      setCarouselModal({
-                        ...carouselModal,
-                        index: carouselModal.index + 1,
-                      })
-                    }
-                    className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
-                  >
-                    <ChevronRight className="w-6 h-6" />
-                  </button>
-                )}
+                  {/* Right arrow */}
+                  {carouselModal.index < carouselModal.post.media_urls.length - 1 && (
+                    <button
+                      onClick={() =>
+                        setCarouselModal({
+                          ...carouselModal,
+                          index: carouselModal.index + 1,
+                        })
+                      }
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors backdrop-blur-sm"
+                    >
+                      <ChevronRight className="w-8 h-8" />
+                    </button>
+                  )}
 
-                {/* Image counter */}
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/70 text-white text-sm rounded-full">
-                  {carouselModal.index + 1} / {carouselModal.post.media_urls.length}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Caption */}
-          {carouselModal.post.caption && (
-            <div className="absolute bottom-8 left-8 right-8 max-w-2xl mx-auto p-4 bg-black/70 text-white text-sm rounded-lg max-h-32 overflow-y-auto">
-              {carouselModal.post.caption}
+                  {/* Image counter */}
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/70 text-white text-sm rounded-full backdrop-blur-sm">
+                    {carouselModal.index + 1} / {carouselModal.post.media_urls.length}
+                  </div>
+                </>
+              )}
             </div>
-          )}
+
+            {/* Caption */}
+            {carouselModal.post.caption && (
+              <div className="w-full max-w-4xl mt-4 p-4 bg-black/80 text-white text-sm rounded-lg max-h-32 overflow-y-auto backdrop-blur-sm">
+                {carouselModal.post.caption}
+              </div>
+            )}
+
+            {/* Post info */}
+            <div className="w-full max-w-4xl mt-2 flex items-center justify-center gap-6 text-white/80 text-sm">
+              <div className="flex items-center gap-2">
+                <Heart className="w-4 h-4" />
+                <span>{carouselModal.post.likes_count?.toLocaleString() || 0}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <MessageCircle className="w-4 h-4" />
+                <span>{carouselModal.post.comments_count?.toLocaleString() || 0}</span>
+              </div>
+              {carouselModal.post.views_count > 0 && (
+                <div className="flex items-center gap-2">
+                  <Eye className="w-4 h-4" />
+                  <span>{carouselModal.post.views_count?.toLocaleString()}</span>
+                </div>
+              )}
+              {carouselModal.post.post_url && (
+                <a
+                  href={carouselModal.post.post_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 hover:text-pink-400 transition-colors"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Instagram className="w-4 h-4" />
+                  <span>View on Instagram</span>
+                </a>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -569,28 +643,74 @@ export default function Instagrams() {
           {/* Close button */}
           <button
             onClick={() => setVideoModal(null)}
-            className="absolute top-4 right-4 p-2 text-white hover:bg-white/10 rounded-lg transition-colors z-10"
+            className="absolute top-4 right-4 p-3 text-white hover:bg-white/20 rounded-full transition-colors z-10 backdrop-blur-sm bg-black/30"
           >
             <X className="w-6 h-6" />
           </button>
 
           {/* Video container */}
-          <div className="relative max-w-4xl w-full">
-            <video
-              src={videoModal.video_url}
-              poster={videoModal.display_url}
-              controls
-              autoPlay
-              className="w-full rounded-lg"
-              style={{ maxHeight: '80vh' }}
-            />
+          <div className="relative max-w-4xl w-full flex flex-col items-center">
+            {videoModal.video_url ? (
+              // If video URL is available, show video player
+              <video
+                src={videoModal.video_url}
+                poster={videoModal.display_url}
+                controls
+                autoPlay
+                className="w-full rounded-lg"
+                style={{ maxHeight: '80vh' }}
+              />
+            ) : (
+              // If no video URL, show thumbnail with message
+              <div className="w-full flex flex-col items-center">
+                <img
+                  src={videoModal.display_url}
+                  alt="Video thumbnail"
+                  className="max-h-[70vh] max-w-full object-contain rounded-lg"
+                />
+                <div className="mt-6 p-6 bg-slate-800/90 backdrop-blur-sm rounded-xl text-center">
+                  <Play className="w-12 h-12 mx-auto mb-3 text-pink-400" />
+                  <p className="text-white text-lg mb-2">Video playback not available</p>
+                  <p className="text-slate-400 text-sm mb-4">
+                    The video file wasn't captured during scraping
+                  </p>
+                  <a
+                    href={videoModal.post_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-pink-500 to-purple-500 text-white rounded-lg hover:from-pink-600 hover:to-purple-600 transition-all"
+                  >
+                    <Instagram className="w-5 h-5" />
+                    Watch on Instagram
+                  </a>
+                </div>
+              </div>
+            )}
 
             {/* Caption */}
             {videoModal.caption && (
-              <div className="mt-4 p-4 bg-black/70 text-white text-sm rounded-lg max-h-32 overflow-y-auto">
+              <div className="w-full max-w-4xl mt-4 p-4 bg-black/80 text-white text-sm rounded-lg max-h-32 overflow-y-auto backdrop-blur-sm">
                 {videoModal.caption}
               </div>
             )}
+
+            {/* Post info */}
+            <div className="w-full max-w-4xl mt-2 flex items-center justify-center gap-6 text-white/80 text-sm">
+              <div className="flex items-center gap-2">
+                <Heart className="w-4 h-4" />
+                <span>{videoModal.likes_count?.toLocaleString() || 0}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <MessageCircle className="w-4 h-4" />
+                <span>{videoModal.comments_count?.toLocaleString() || 0}</span>
+              </div>
+              {videoModal.views_count > 0 && (
+                <div className="flex items-center gap-2">
+                  <Eye className="w-4 h-4" />
+                  <span>{videoModal.views_count?.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

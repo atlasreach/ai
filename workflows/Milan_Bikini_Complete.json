@@ -1,0 +1,122 @@
+{
+  "1": {
+    "inputs": {
+      "width": 1024,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "Empty Latent"
+    }
+  },
+  "2": {
+    "inputs": {
+      "seed": 42,
+      "steps": 28,
+      "cfg": 3.8,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": ["10", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["1", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "3": {
+    "inputs": {
+      "samples": ["2", 0],
+      "vae": ["9", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "4": {
+    "inputs": {
+      "filename_prefix": "Milan_Bikini",
+      "images": ["3", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "milan, beautiful woman in bikini at beach, photorealistic, 8k, natural lighting, high detail",
+      "clip": ["8", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "blurry, deformed, ugly, bad anatomy, low quality, text, watermark",
+      "clip": ["8", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "8": {
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "9": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "10": {
+    "inputs": {
+      "shift": 3.8,
+      "model": ["11", 0]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSampling AuraFlow"
+    }
+  },
+  "11": {
+    "inputs": {
+      "lora_name": "milan_000002000.safetensors",
+      "strength_model": 0.75,
+      "model": ["12", 0]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Milan LoRA"
+    }
+  },
+  "12": {
+    "inputs": {
+      "unet_name": "qwen_image_fp8_e4m3fn.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  }
+}

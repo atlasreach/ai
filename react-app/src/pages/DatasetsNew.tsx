@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Loader, Database, Image as ImageIcon, Download, Trash2, Upload, Instagram, ArrowRight, ArrowLeft, Sparkles } from 'lucide-react';
+import { Plus, Loader, Database, Image as ImageIcon, Download, Trash2, Upload, ArrowRight, ArrowLeft, Sparkles } from 'lucide-react';
 // import DatasetEditor from './DatasetEditor'; // TODO: Add back dataset editor
 
 const API_BASE = window.location.hostname === 'localhost'
@@ -25,13 +25,6 @@ interface Dataset {
   updated_at: string;
 }
 
-interface InstagramPost {
-  id: string;
-  display_url: string;
-  caption?: string;
-  post_type: 'Image' | 'Video' | 'Sidecar';
-}
-
 export default function Datasets() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -39,7 +32,9 @@ export default function Datasets() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [filterModelId, setFilterModelId] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
-  // const [editingDatasetId, setEditingDatasetId] = useState<string | null>(null); // TODO: Add back when dataset editor is restored
+  const [editingDatasetId, setEditingDatasetId] = useState<string | null>(null);
+  const [datasetImages, setDatasetImages] = useState<any[]>([]);
+  const [generatingCaptions, setGeneratingCaptions] = useState(false);
 
   // Create wizard state
   const [step, setStep] = useState(1);
@@ -48,12 +43,11 @@ export default function Datasets() {
   const [modelId, setModelId] = useState('');
   const [description, setDescription] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
-  const [instagramPosts, setInstagramPosts] = useState<InstagramPost[]>([]);
-  const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(new Set());
-  const [generating, setGenerating] = useState(false);
   const [captioning, setCaptioning] = useState(false);
   const [creating, setCreating] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
 
   // ALL HOOKS MUST BE HERE - before any function definitions
   useEffect(() => {
@@ -61,12 +55,12 @@ export default function Datasets() {
     loadModels();
   }, [filterModelId, filterType]);
 
-  // Load Instagram posts when model is selected
+  // Load dataset images when editing
   useEffect(() => {
-    if (modelId && step === 3) {
-      loadInstagramPosts(modelId);
+    if (editingDatasetId) {
+      loadDatasetImages(editingDatasetId);
     }
-  }, [modelId, step]);
+  }, [editingDatasetId]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -108,27 +102,6 @@ export default function Datasets() {
     }
   };
 
-  const loadInstagramPosts = async (modelId: string) => {
-    setGenerating(true);
-    try {
-      const response = await fetch(`${API_BASE}/api/persona/models/${modelId}/instagram-posts`);
-      const data = await response.json();
-
-      if (data.success && data.posts) {
-        const imagePosts = data.posts.filter((post: InstagramPost) =>
-          post.post_type === 'Image' || post.post_type === 'Sidecar' || post.post_type === 'Video'
-        );
-        setInstagramPosts(imagePosts);
-      } else {
-        setInstagramPosts([]);
-      }
-    } catch (error) {
-      console.error('Failed to load Instagram posts:', error);
-      setInstagramPosts([]);
-    } finally {
-      setGenerating(false);
-    }
-  };
 
   const generateCaptions = async () => {
     setCaptioning(true);
@@ -140,11 +113,152 @@ export default function Datasets() {
     createDataset();
   };
 
+  const loadDatasetImages = async (datasetId: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/datasets/${datasetId}/images`);
+      const data = await response.json();
+      setDatasetImages(data);
+    } catch (error) {
+      console.error('Failed to load dataset images:', error);
+    }
+  };
+
+  const generateAllCaptions = async (datasetId: string) => {
+    if (!confirm('Generate captions for all images? This will use Grok AI and may take a few minutes.')) {
+      return;
+    }
+
+    setGeneratingCaptions(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/datasets/${datasetId}/generate-all-captions`, {
+        method: 'POST'
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`✅ Generated captions for ${result.updated_count} images!\n\nSkipped: ${result.skipped_count} (already had captions)`);
+        // Reload images to show new captions
+        await loadDatasetImages(datasetId);
+      } else {
+        alert('Failed to generate captions');
+      }
+    } catch (error) {
+      console.error('Failed to generate captions:', error);
+      alert('Failed to generate captions: ' + error);
+    } finally {
+      setGeneratingCaptions(false);
+    }
+  };
+
+  const regenerateSingleCaption = async (datasetId: string, imageId: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/datasets/${datasetId}/generate-caption/${imageId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        // Update the image in the list
+        setDatasetImages(prev => prev.map(img =>
+          img.id === imageId ? { ...img, caption: result.caption } : img
+        ));
+      }
+    } catch (error) {
+      console.error('Failed to generate caption:', error);
+      alert('Failed to generate caption');
+    }
+  };
+
+  const updateCaption = async (datasetId: string, imageId: string, newCaption: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/datasets/${datasetId}/images/${imageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caption: newCaption })
+      });
+
+      if (response.ok) {
+        // Update the image in the list
+        setDatasetImages(prev => prev.map(img =>
+          img.id === imageId ? { ...img, caption: newCaption } : img
+        ));
+      }
+    } catch (error) {
+      console.error('Failed to update caption:', error);
+    }
+  };
+
+  const deleteSelectedImages = async (datasetId: string) => {
+    if (selectedImages.size === 0) {
+      alert('No images selected');
+      return;
+    }
+
+    const count = selectedImages.size;
+    if (!confirm(`Delete ${count} selected images?`)) {
+      return;
+    }
+
+    setLoading(true);
+    let successCount = 0;
+
+    try {
+      // Delete each selected image
+      for (const imageId of selectedImages) {
+        try {
+          const response = await fetch(`${API_BASE}/api/datasets/${datasetId}/images/${imageId}`, {
+            method: 'DELETE'
+          });
+
+          if (response.ok) {
+            successCount++;
+            console.log(`Deleted image ${imageId}`);
+          } else {
+            console.error(`Failed to delete image ${imageId}:`, await response.text());
+          }
+        } catch (err) {
+          console.error(`Error deleting image ${imageId}:`, err);
+        }
+      }
+
+      // Clear selection and reload
+      setSelectedImages(new Set());
+      await loadDatasetImages(datasetId);
+
+      alert(`✅ Successfully deleted ${successCount} of ${count} images`);
+    } catch (error) {
+      console.error('Failed to delete images:', error);
+      alert('Failed to delete images: ' + error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleImageSelection = (imageId: string) => {
+    const newSelected = new Set(selectedImages);
+    if (newSelected.has(imageId)) {
+      newSelected.delete(imageId);
+    } else {
+      newSelected.add(imageId);
+    }
+    setSelectedImages(newSelected);
+  };
+
+  const selectAllImages = () => {
+    setSelectedImages(new Set(datasetImages.map(img => img.id)));
+  };
+
+  const deselectAllImages = () => {
+    setSelectedImages(new Set());
+  };
+
   const createDataset = async () => {
     if (!name || !modelId) return;
 
     // Check that we have images
-    const hasImages = uploadedFiles.length > 0 || selectedPostIds.size > 0;
+    const hasImages = uploadedFiles.length > 0;
     if (!hasImages) {
       alert('Please add at least one image before creating the dataset');
       return;
@@ -320,21 +434,131 @@ export default function Datasets() {
   const uploadedImageCount = uploadedFiles.filter(f => !f.name.endsWith('.zip')).length;
   const uploadedZipCount = uploadedFiles.filter(f => f.name.endsWith('.zip')).length;
   const totalFromUploads = uploadedImageCount + uploadedZipCount;
-  const totalImageCount = totalFromUploads + selectedPostIds.size;
+  const totalImageCount = totalFromUploads;
 
-  // If editing a dataset, show the editor
-  // TODO: Add back dataset editor functionality
-  // if (editingDatasetId) {
-  //   return (
-  //     <DatasetEditor
-  //       datasetId={editingDatasetId}
-  //       onBack={() => {
-  //         setEditingDatasetId(null);
-  //         loadDatasets();
-  //       }}
-  //     />
-  //   );
-  // }
+  // If editing a dataset, show the viewer
+  if (editingDatasetId) {
+    const currentDataset = datasets.find(d => d.id === editingDatasetId);
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-8">
+        <div className="max-w-7xl mx-auto">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <button
+                onClick={() => setEditingDatasetId(null)}
+                className="text-blue-400 hover:text-blue-300 mb-2 flex items-center gap-2"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to Datasets
+              </button>
+              <h1 className="text-3xl font-bold">{currentDataset?.name || 'Dataset'}</h1>
+              <p className="text-slate-400">{datasetImages.length} images</p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setSelectionMode(!selectionMode)}
+                className={`px-4 py-2 ${selectionMode ? 'bg-orange-600 hover:bg-orange-700' : 'bg-slate-700 hover:bg-slate-600'} rounded-lg transition-colors`}
+              >
+                {selectionMode ? 'Exit Selection' : 'Select Images'}
+              </button>
+              {selectionMode && (
+                <>
+                  <button
+                    onClick={selectAllImages}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    onClick={deselectAllImages}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                  >
+                    Deselect All
+                  </button>
+                  <button
+                    onClick={() => deleteSelectedImages(editingDatasetId)}
+                    disabled={selectedImages.size === 0}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-slate-700 rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete ({selectedImages.size})
+                  </button>
+                </>
+              )}
+              {!selectionMode && (
+                <>
+                  <button
+                    onClick={() => generateAllCaptions(editingDatasetId)}
+                    disabled={generatingCaptions}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-700 rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    {generatingCaptions ? <Loader className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    Generate All Captions
+                  </button>
+                  <button
+                    onClick={() => downloadDataset(editingDatasetId, currentDataset?.name || 'dataset')}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download ZIP
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Images Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {datasetImages.map((image) => {
+              const isSelected = selectedImages.has(image.id);
+              return (
+              <div
+                key={image.id}
+                className={`bg-slate-900 rounded-lg overflow-hidden border-2 transition-all ${isSelected ? 'border-blue-500 ring-2 ring-blue-500/50' : 'border-slate-800'}`}
+              >
+                <div className="relative">
+                  <img
+                    src={image.image_url}
+                    alt="Dataset image"
+                    className="w-full aspect-square object-cover"
+                    onClick={() => selectionMode && toggleImageSelection(image.id)}
+                    style={{ cursor: selectionMode ? 'pointer' : 'default' }}
+                  />
+                  {selectionMode && (
+                    <div className="absolute top-2 right-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleImageSelection(image.id)}
+                        className="w-6 h-6 cursor-pointer"
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="p-4">
+                  <textarea
+                    value={image.caption || ''}
+                    onChange={(e) => updateCaption(editingDatasetId, image.id, e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm min-h-[100px] focus:outline-none focus:border-blue-500"
+                    placeholder="No caption"
+                  />
+                  <button
+                    onClick={() => regenerateSingleCaption(editingDatasetId, image.id)}
+                    className="mt-2 w-full px-3 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs transition-colors"
+                  >
+                    Regenerate Caption
+                  </button>
+                </div>
+              </div>
+            );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -447,7 +671,7 @@ export default function Datasets() {
 
                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
-                    onClick={() => alert('Dataset editor temporarily disabled. Edit functionality coming soon!')}
+                    onClick={() => setEditingDatasetId(dataset.id)}
                     className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm transition-colors"
                   >
                     Open
@@ -473,14 +697,13 @@ export default function Datasets() {
         )}
       </div>
 
-      {/* Create Modal - 3-Step Wizard */}
+      {/* Create Modal - Dataset Creation Wizard */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-4xl w-full max-h-[90vh] flex flex-col">
             <h2 className="text-xl font-bold mb-4">
               {step === 1 && 'Create Dataset - Basic Info'}
               {step === 2 && 'Upload Files'}
-              {step === 3 && 'Add from Instagram (Optional)'}
               {step === 4 && 'Generate Captions'}
             </h2>
 
@@ -488,7 +711,6 @@ export default function Datasets() {
             <div className="flex gap-2 mb-6">
               <div className={`flex-1 h-1 rounded ${step >= 1 ? 'bg-blue-500' : 'bg-slate-700'}`} />
               <div className={`flex-1 h-1 rounded ${step >= 2 ? 'bg-blue-500' : 'bg-slate-700'}`} />
-              <div className={`flex-1 h-1 rounded ${step >= 3 ? 'bg-blue-500' : 'bg-slate-700'}`} />
               <div className={`flex-1 h-1 rounded ${step >= 4 ? 'bg-blue-500' : 'bg-slate-700'}`} />
             </div>
 
@@ -638,77 +860,6 @@ export default function Datasets() {
                 </div>
               )}
 
-              {/* Step 3: Instagram Selection */}
-              {step === 3 && (
-                <div className="space-y-6">
-                  {generating ? (
-                    <div className="text-center py-12">
-                      <Loader className="w-8 h-8 animate-spin text-blue-500 mx-auto mb-4" />
-                      <p className="text-slate-400">Loading Instagram posts...</p>
-                    </div>
-                  ) : instagramPosts.length === 0 ? (
-                    <div className="text-center py-12">
-                      <Instagram className="w-16 h-16 mx-auto mb-4 text-slate-600" />
-                      <h3 className="text-lg font-semibold mb-2">No Instagram posts available</h3>
-                      <p className="text-slate-400 mb-4">
-                        This model doesn't have any scraped Instagram posts yet
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        You can skip this step and continue with the uploaded files
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-medium">Select Instagram Posts</h3>
-                        <p className="text-sm text-slate-400">
-                          {selectedPostIds.size} selected from {instagramPosts.length} posts
-                        </p>
-                      </div>
-                      <div className="grid grid-cols-4 gap-3 max-h-96 overflow-y-auto">
-                        {instagramPosts.map((post) => {
-                          const isSelected = selectedPostIds.has(post.id);
-                          return (
-                            <div
-                              key={post.id}
-                              onClick={() => {
-                                const newSelected = new Set(selectedPostIds);
-                                if (isSelected) {
-                                  newSelected.delete(post.id);
-                                } else {
-                                  newSelected.add(post.id);
-                                }
-                                setSelectedPostIds(newSelected);
-                              }}
-                              className={`relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
-                                isSelected
-                                  ? 'border-pink-500 scale-95'
-                                  : 'border-transparent hover:border-slate-600'
-                              }`}
-                            >
-                              <img
-                                src={post.display_url}
-                                alt="Instagram post"
-                                className="w-full h-full object-cover"
-                              />
-                              {isSelected && (
-                                <div className="absolute inset-0 bg-pink-500/30 flex items-center justify-center">
-                                  <div className="w-8 h-8 bg-pink-500 rounded-full flex items-center justify-center">
-                                    <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                    </svg>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
               {/* Step 4: Generate Captions */}
               {step === 4 && (
                 <div className="text-center py-12">
@@ -722,8 +873,7 @@ export default function Datasets() {
                       Grok AI will analyze each image and generate descriptive captions for training
                     </p>
                     <div className="text-xs text-slate-500">
-                      <p>✓ {totalFromUploads} from uploads</p>
-                      <p>✓ {selectedPostIds.size} from Instagram</p>
+                      <p>✓ {totalFromUploads} images ready to caption</p>
                     </div>
                   </div>
                 </div>
@@ -734,7 +884,7 @@ export default function Datasets() {
             <div className="flex gap-3 mt-6 pt-4 border-t border-slate-800">
               {step > 1 && (
                 <button
-                  onClick={() => setStep(step - 1)}
+                  onClick={() => setStep(step === 4 ? 2 : step - 1)}
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-2"
                   disabled={creating || captioning}
                 >
@@ -767,24 +917,13 @@ export default function Datasets() {
 
               {step === 2 && (
                 <button
-                  onClick={() => setStep(3)}
-                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center justify-center gap-2"
+                  onClick={() => setStep(4)}
+                  disabled={uploadedFiles.length === 0}
+                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
-                  {totalFromUploads > 0 ? 'Next: Instagram (Optional)' : 'Skip to Instagram'}
+                  Next: Generate Captions
                   <ArrowRight className="w-4 h-4" />
                 </button>
-              )}
-
-              {step === 3 && (
-                <>
-                  <button
-                    onClick={() => setStep(4)}
-                    className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
-                    {selectedPostIds.size > 0 ? 'Next: Generate Captions' : 'Skip to Captions'}
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </>
               )}
 
               {step === 4 && (

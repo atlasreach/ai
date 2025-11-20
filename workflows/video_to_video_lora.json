@@ -1,0 +1,119 @@
+{
+  "last_node_id": 12,
+  "last_link_id": 20,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "VHS_LoadVideo",
+      "pos": [50, 50],
+      "size": [400, 300],
+      "widgets_values": {
+        "video": "input_video.mp4",
+        "force_rate": 15,
+        "force_size": "Custom",
+        "custom_width": 576,
+        "custom_height": 1024,
+        "frame_load_cap": 0,
+        "skip_first_frames": 0,
+        "select_every_nth": 1
+      }
+    },
+    {
+      "id": 2,
+      "type": "UNETLoader",
+      "pos": [500, 50],
+      "widgets_values": {
+        "unet_name": "qwen_image_fp8_e4m3fn.safetensors",
+        "weight_dtype": "fp8_e4m3fn"
+      }
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "pos": [500, 200],
+      "widgets_values": { "vae_name": "qwen_image_vae.safetensors" }
+    },
+    {
+      "id": 5,
+      "type": "LoraLoaderModelOnly",
+      "pos": [800, 50],
+      "widgets_values": {
+        "lora_name": "1girlqwen.safetensors",
+        "strength_model": 0.8,
+        "strength_clip": 0.8
+      },
+      "inputs": [{ "name": "model", "type": "MODEL", "link": 1 }]
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncodeFlux",
+      "pos": [800, 250],
+      "widgets_values": {
+        "text": "beautiful young woman, instagram model, detailed skin, sharp eyes, perfect body, high quality"
+      }
+    },
+    {
+      "id": 8,
+      "type": "VAEEncode",
+      "pos": [500, 500],
+      "inputs": [
+        { "name": "pixels", "type": "IMAGE", "link": 10 },
+        { "name": "vae", "type": "VAE", "link": 4 }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "FluxSampler",
+      "pos": [1100, 50],
+      "widgets_values": {
+        "steps": 30,
+        "cfg": 1.2,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "denoise": 0.55
+      },
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 5 },
+        { "name": "conditioning", "type": "CONDITIONING", "link": 6 },
+        { "name": "latent_image", "type": "LATENT", "link": 8 }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "VAEDecode",
+      "pos": [1400, 50],
+      "inputs": [
+        { "name": "samples", "type": "LATENT", "link": 9 },
+        { "name": "vae", "type": "VAE", "link": 4 }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "VHS_VideoCombine",
+      "pos": [1700, 50],
+      "widgets_values": {
+        "frame_rate": 15,
+        "loop_count": 0,
+        "filename_prefix": "Qwen_Quinn_Reel",
+        "format": "video/h264-mp4",
+        "crf": 18,
+        "save_output": true
+      },
+      "inputs": [{ "name": "images", "type": "IMAGE", "link": 10 }]
+    }
+  ],
+  "links": [
+    [1, 2, 0, 5, 0, "MODEL"],
+    [4, 4, 0, 8, 1, "VAE"],
+    [5, 5, 0, 9, 0, "MODEL"],
+    [6, 6, 0, 9, 1, "CONDITIONING"],
+    [8, 8, 0, 9, 2, "LATENT"],
+    [9, 9, 0, 10, 0, "LATENT"],
+    [10, 1, 0, 8, 0, "IMAGE"],
+    [10, 10, 0, 11, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

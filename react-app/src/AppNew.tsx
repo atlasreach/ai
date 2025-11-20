@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { Database, Image, Sparkles, Settings, Instagram } from 'lucide-react';
+import { Database, Image, Sparkles, Settings } from 'lucide-react';
 import ModelManager from './pages/ModelManagerNew';
 import Datasets from './pages/DatasetsNew';
 import ContentProduction from './pages/ContentProduction';
-import Instagrams from './pages/Instagrams';
 
-type Page = 'models' | 'datasets' | 'production' | 'instagrams' | 'settings';
+type Page = 'models' | 'datasets' | 'production' | 'settings';
 
 export default function AppNew() {
   const [currentPage, setCurrentPage] = useState<Page>('models');
@@ -13,7 +12,6 @@ export default function AppNew() {
   const navigation = [
     { id: 'models' as Page, name: 'Model Manager', icon: Database, description: 'Manage your AI models' },
     { id: 'datasets' as Page, name: 'Datasets', icon: Image, description: 'Training & content datasets' },
-    { id: 'instagrams' as Page, name: 'Instagram Library', icon: Instagram, description: 'Scrape & manage Instagram accounts' },
     { id: 'production' as Page, name: 'Content Production', icon: Sparkles, description: 'Generate content' },
     { id: 'settings' as Page, name: 'Settings', icon: Settings, description: 'Configure your workspace' },
   ];
@@ -24,8 +22,6 @@ export default function AppNew() {
         return <ModelManager />;
       case 'datasets':
         return <Datasets />;
-      case 'instagrams':
-        return <Instagrams />;
       case 'production':
         return <ContentProduction />;
       case 'settings':

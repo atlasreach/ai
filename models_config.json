@@ -1,0 +1,56 @@
+{
+  "models": [
+    {
+      "id": "milan",
+      "name": "Milan",
+      "attributes": {
+        "skin_tone": "tan",
+        "hair_color": "brunette",
+        "hair_style": "long brunette hair"
+      },
+      "lora_file": "milan_000002000.safetensors",
+      "lora_strength": 0.8,
+      "trigger_word": "milan",
+      "negative_prompt": "blonde hair, light hair, pale skin"
+    },
+    {
+      "id": "skyler",
+      "name": "Skyler",
+      "attributes": {
+        "skin_tone": "tan",
+        "hair_color": "brown",
+        "hair_style": "long brown hair"
+      },
+      "lora_file": "skyler_000002000.safetensors",
+      "lora_strength": 0.8,
+      "trigger_word": "skyler",
+      "negative_prompt": "blonde hair, light hair, pale skin"
+    },
+    {
+      "id": "sky",
+      "name": "Sky",
+      "attributes": {
+        "skin_tone": "tan",
+        "hair_color": "brunette",
+        "hair_style": "long brunette hair"
+      },
+      "lora_file": "sky_000002000.safetensors",
+      "lora_strength": 0.8,
+      "trigger_word": "sky",
+      "negative_prompt": "blonde hair, light hair, pale skin"
+    },
+    {
+      "id": "cam",
+      "name": "Cam",
+      "attributes": {
+        "skin_tone": "tan",
+        "hair_color": "blonde",
+        "hair_style": "long blonde hair"
+      },
+      "lora_file": "cam_000002000.safetensors",
+      "lora_strength": 0.8,
+      "trigger_word": "cam",
+      "negative_prompt": "dark hair, brunette hair, brown hair, pale skin"
+    }
+  ]
+}
