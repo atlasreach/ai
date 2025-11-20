@@ -47,6 +47,7 @@ cur.execute("""
 CREATE TABLE reference_images (
     id SERIAL PRIMARY KEY,
     filename VARCHAR(500) NOT NULL,
+    category VARCHAR(100) NOT NULL,
     storage_path VARCHAR(1000) NOT NULL,
     vision_description TEXT,
     analyzed_at TIMESTAMP,
