@@ -34,6 +34,16 @@ export default function Layout({ children }) {
               >
                 Gallery
               </Link>
+              <Link
+                to="/models"
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  isActive('/models')
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                }`}
+              >
+                Models
+              </Link>
             </nav>
           </div>
         </div>

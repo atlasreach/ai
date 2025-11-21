@@ -192,6 +192,22 @@ export default function Generate() {
     }
   }
 
+  async function clearStuckJobs() {
+    if (!confirm('Clear all stuck jobs older than 15 minutes?')) return
+
+    try {
+      const response = await fetch(`${API_URL}/api/jobs/clear-stuck`, {
+        method: 'POST'
+      })
+      const data = await response.json()
+
+      alert(data.message)
+      fetchJobs()
+    } catch (error) {
+      alert(`Failed to clear stuck jobs: ${error.message}`)
+    }
+  }
+
   async function handleGenerate() {
     if (!selectedModel || !selectedWorkflow || selectedImages.length === 0) {
       alert('Please select a model, workflow, and at least one reference image')
@@ -231,6 +247,9 @@ export default function Generate() {
           continue
         }
 
+        // Generate a unique batch ID for this image's variations
+        const batchId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
         // Submit multiple variations for this image
         for (let i = 0; i < params.variations; i++) {
           totalJobs++
@@ -242,6 +261,7 @@ export default function Generate() {
               modelId: selectedModel.id,
               workflowSlug: selectedWorkflow.slug,
               uploadedImageFilename: uploadResult.filename,
+              batchId: params.variations > 1 ? batchId : null, // Only set batch ID if multiple variations
               parameters: {
                 ...params,
                 seed: -1, // Always random seed for variations
@@ -500,7 +520,7 @@ export default function Generate() {
                     <input
                       type="range"
                       min="1"
-                      max="5"
+                      max="10"
                       step="1"
                       value={params.variations}
                       onChange={(e) => setParams({...params, variations: parseInt(e.target.value)})}
@@ -564,12 +584,21 @@ export default function Generate() {
             <section className="bg-gray-900/50 rounded-lg p-4 sticky top-20">
               <div className="flex justify-between items-center mb-3">
                 <h2 className="text-lg font-semibold">Generation Queue</h2>
-                <button
-                  onClick={fetchJobs}
-                  className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg"
-                >
-                  Refresh
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={clearStuckJobs}
+                    className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 rounded-lg"
+                    title="Clear stuck jobs older than 15 minutes"
+                  >
+                    🗑️ Clear Stuck
+                  </button>
+                  <button
+                    onClick={fetchJobs}
+                    className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg"
+                  >
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto">

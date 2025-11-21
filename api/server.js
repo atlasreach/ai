@@ -8,6 +8,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import multer from 'multer'
 import FormData from 'form-data'
+import Replicate from 'replicate'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -27,6 +28,11 @@ const supabase = createClient(
 
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY
 const COMFYUI_API_URL = process.env.COMFYUI_API_URL
+
+// Initialize Replicate client
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN
+})
 
 // Load workflow template
 async function loadWorkflowTemplate(slug) {
@@ -135,7 +141,7 @@ app.post('/api/upload-face', upload.single('image'), async (req, res) => {
 // POST /api/generate - Queue a new generation job
 app.post('/api/generate', async (req, res) => {
   try {
-    const { modelId, workflowSlug, uploadedImageFilename, parameters } = req.body
+    const { modelId, workflowSlug, uploadedImageFilename, parameters, batchId } = req.body
 
     if (!uploadedImageFilename) {
       return res.status(400).json({ error: 'uploadedImageFilename is required' })
@@ -188,7 +194,8 @@ app.post('/api/generate', async (req, res) => {
         parameters: { ...parameters, workflow_slug: workflowSlug, uploaded_image: uploadedImageFilename },
         prompt_used: positivePrompt,
         negative_prompt_used: negativePrompt,
-        status: 'queued'
+        status: 'queued',
+        batch_id: batchId || null
       })
       .select()
       .single()
@@ -296,14 +303,620 @@ app.get('/api/jobs/:id', async (req, res) => {
 // GET /api/gallery-images - Get all gallery images (from generated_images table)
 app.get('/api/gallery-images', async (req, res) => {
   try {
-    const { data: images } = await supabase
+    const { starred } = req.query
+
+    let query = supabase
       .from('generated_images')
       .select('*')
+      .eq('is_deleted', false)
+
+    if (starred === 'true') {
+      query = query.eq('is_starred', true)
+    }
+
+    const { data: images } = await query
       .order('created_at', { ascending: false })
       .limit(200)
 
     res.json(images || [])
   } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/star - Toggle star/favorite
+app.post('/api/gallery-images/:id/star', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { starred } = req.body
+
+    const { data, error } = await supabase
+      .from('generated_images')
+      .update({ is_starred: starred })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// DELETE /api/gallery-images/:id - Soft delete image
+app.delete('/api/gallery-images/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const { data, error } = await supabase
+      .from('generated_images')
+      .update({
+        is_deleted: true,
+        deleted_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/face-swap - Face swap using Replicate
+app.post('/api/gallery-images/:id/face-swap', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { faceSourceUrl } = req.body
+
+    // Get the original image
+    const { data: originalImage, error: fetchError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !originalImage) {
+      return res.status(404).json({ error: 'Image not found' })
+    }
+
+    // Default face source URL (source.jpg from Supabase storage)
+    const swapFaceUrl = faceSourceUrl || `${process.env.SUPABASE_URL}/storage/v1/object/public/face-sources/source.jpg`
+
+    console.log('Starting face swap...')
+    console.log('Input image:', originalImage.image_url)
+    console.log('Swap face:', swapFaceUrl)
+
+    // Run face swap with Replicate
+    const output = await replicate.run(
+      "cdingram/face-swap:d1d6ea8c8be89d664a07a457526f7128109dee7030fdac424788d762c71ed111",
+      {
+        input: {
+          input_image: originalImage.image_url,
+          swap_image: swapFaceUrl
+        }
+      }
+    )
+
+    // Download the result from Replicate
+    const imageResponse = await axios.get(output, { responseType: 'arraybuffer' })
+    const imageBuffer = Buffer.from(imageResponse.data)
+
+    // Upload to Supabase Storage
+    const timestamp = Date.now()
+    const storagePath = `face_swap_${timestamp}.png`
+
+    const { error: uploadError } = await supabase.storage
+      .from('generated-images')
+      .upload(storagePath, imageBuffer, {
+        contentType: 'image/png',
+        upsert: false
+      })
+
+    if (uploadError) throw uploadError
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('generated-images')
+      .getPublicUrl(storagePath)
+
+    // Insert new image into generated_images
+    const { data: newImage, error: insertError } = await supabase
+      .from('generated_images')
+      .insert({
+        parent_image_id: originalImage.id,
+        model_id: originalImage.model_id,
+        image_url: publicUrlData.publicUrl,
+        storage_path: storagePath,
+        prompt_used: originalImage.prompt_used,
+        negative_prompt_used: originalImage.negative_prompt_used,
+        parameters: originalImage.parameters,
+        model_name: originalImage.model_name,
+        model_slug: originalImage.model_slug,
+        edit_type: 'face_swap',
+        face_swap_source: swapFaceUrl,
+        batch_id: originalImage.batch_id,
+        group_id: originalImage.group_id  // Preserve manual grouping
+      })
+      .select()
+      .single()
+
+    if (insertError) throw insertError
+
+    // Auto-delete the original image
+    await supabase
+      .from('generated_images')
+      .update({
+        is_deleted: true,
+        deleted_at: new Date().toISOString()
+      })
+      .eq('id', originalImage.id)
+
+    console.log(`✅ Face swap complete and original image ${originalImage.id} deleted`)
+
+    res.json({ success: true, image: newImage })
+  } catch (error) {
+    console.error('Face swap error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/wavespeed-edit - Single image edit with Wavespeed
+app.post('/api/gallery-images/:id/wavespeed-edit', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { editPrompt } = req.body
+
+    if (!editPrompt) {
+      return res.status(400).json({ error: 'Edit prompt is required' })
+    }
+
+    // Get the original image
+    const { data: originalImage, error: fetchError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !originalImage) {
+      return res.status(404).json({ error: 'Image not found' })
+    }
+
+    console.log('Starting Wavespeed edit...')
+    console.log('Input image:', originalImage.image_url)
+    console.log('Edit prompt:', editPrompt)
+
+    // Call Wavespeed API
+    const wavespeedResponse = await axios.post(
+      'https://api.wavespeed.ai/api/v3/bytedance/seedream-v4/edit',
+      {
+        prompt: editPrompt,
+        images: [originalImage.image_url],
+        enable_sync_mode: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const editedImageUrl = wavespeedResponse.data.data.outputs[0]
+
+    // Download the result
+    const imageResponse = await axios.get(editedImageUrl, { responseType: 'arraybuffer' })
+    const imageBuffer = Buffer.from(imageResponse.data)
+
+    // Upload to Supabase Storage
+    const timestamp = Date.now()
+    const storagePath = `wavespeed_edit_${timestamp}.png`
+
+    const { error: uploadError } = await supabase.storage
+      .from('generated-images')
+      .upload(storagePath, imageBuffer, {
+        contentType: 'image/png',
+        upsert: false
+      })
+
+    if (uploadError) throw uploadError
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('generated-images')
+      .getPublicUrl(storagePath)
+
+    // Insert new image into generated_images
+    const { data: newImage, error: insertError } = await supabase
+      .from('generated_images')
+      .insert({
+        parent_image_id: originalImage.id,
+        model_id: originalImage.model_id,
+        image_url: publicUrlData.publicUrl,
+        storage_path: storagePath,
+        prompt_used: editPrompt,
+        negative_prompt_used: originalImage.negative_prompt_used,
+        parameters: { ...originalImage.parameters, wavespeed_edit_prompt: editPrompt },
+        model_name: originalImage.model_name,
+        model_slug: originalImage.model_slug,
+        edit_type: 'wavespeed_edit',
+        batch_id: originalImage.batch_id,
+        group_id: originalImage.group_id
+      })
+      .select()
+      .single()
+
+    if (insertError) throw insertError
+
+    res.json({ success: true, image: newImage })
+  } catch (error) {
+    console.error('Wavespeed edit error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/edit-with-reference - Edit generated image comparing to its reference
+app.post('/api/gallery-images/:id/edit-with-reference', async (req, res) => {
+  console.log('📸 Edit with Reference request for image:', req.params.id)
+
+  try {
+    const { id } = req.params
+    const { editPrompt } = req.body
+
+    if (!editPrompt) {
+      console.error('❌ No edit prompt provided')
+      return res.status(400).json({ error: 'Edit prompt is required' })
+    }
+
+    // Get the generated image
+    const { data: generatedImage, error: fetchError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !generatedImage) {
+      console.error('❌ Image not found:', fetchError)
+      return res.status(404).json({ error: 'Image not found', details: fetchError?.message })
+    }
+
+    console.log('✓ Found generated image:', generatedImage.id)
+    console.log('  - reference_filename:', generatedImage.reference_filename)
+    console.log('  - parameters.uploaded_image:', generatedImage.parameters?.uploaded_image)
+
+    // Get reference image URL
+    let referenceImageUrl
+    if (generatedImage.reference_filename) {
+      const { data: publicUrlData } = supabase.storage
+        .from('reference-images')
+        .getPublicUrl(generatedImage.reference_filename)
+      referenceImageUrl = publicUrlData.publicUrl
+      console.log('✓ Using Supabase reference URL:', referenceImageUrl)
+    } else if (generatedImage.parameters?.uploaded_image) {
+      // Fallback to ComfyUI path
+      referenceImageUrl = `https://4bpau787p5p1t6-3001.proxy.runpod.net/view?filename=${generatedImage.parameters.uploaded_image}&subfolder=&type=input`
+      console.log('✓ Using ComfyUI reference URL:', referenceImageUrl)
+    } else {
+      console.error('❌ No reference image found')
+      return res.status(400).json({
+        error: 'No reference image found for this generated image',
+        details: 'Image has no reference_filename or uploaded_image parameter'
+      })
+    }
+
+    console.log('📤 Calling Wavespeed API...')
+    console.log('  - Generated image:', generatedImage.image_url)
+    console.log('  - Reference image:', referenceImageUrl)
+    console.log('  - Edit instruction:', editPrompt)
+
+    // Call Wavespeed API with BOTH images
+    const wavespeedResponse = await axios.post(
+      'https://api.wavespeed.ai/api/v3/bytedance/seedream-v4/edit',
+      {
+        prompt: editPrompt,
+        images: [generatedImage.image_url, referenceImageUrl],  // Send both images
+        enable_sync_mode: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const editedImageUrl = wavespeedResponse.data.data.outputs[0]
+
+    // Download the result
+    const imageResponse = await axios.get(editedImageUrl, { responseType: 'arraybuffer' })
+    const imageBuffer = Buffer.from(imageResponse.data)
+
+    // Upload to Supabase Storage
+    const timestamp = Date.now()
+    const storagePath = `edit_with_reference_${timestamp}.png`
+
+    const { error: uploadError } = await supabase.storage
+      .from('generated-images')
+      .upload(storagePath, imageBuffer, {
+        contentType: 'image/png',
+        upsert: false
+      })
+
+    if (uploadError) throw uploadError
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('generated-images')
+      .getPublicUrl(storagePath)
+
+    // Insert new image into generated_images
+    const { data: newImage, error: insertError } = await supabase
+      .from('generated_images')
+      .insert({
+        parent_image_id: generatedImage.id,
+        model_id: generatedImage.model_id,
+        image_url: publicUrlData.publicUrl,
+        storage_path: storagePath,
+        prompt_used: editPrompt,
+        negative_prompt_used: generatedImage.negative_prompt_used,
+        parameters: {
+          ...generatedImage.parameters,
+          edit_with_reference_prompt: editPrompt,
+          reference_image: referenceImageUrl
+        },
+        model_name: generatedImage.model_name,
+        model_slug: generatedImage.model_slug,
+        edit_type: 'edit_with_reference',
+        batch_id: generatedImage.batch_id,
+        group_id: generatedImage.group_id,
+        reference_filename: generatedImage.reference_filename
+      })
+      .select()
+      .single()
+
+    if (insertError) throw insertError
+
+    console.log('✅ Edit with reference complete:', newImage.id)
+    res.json({ success: true, image: newImage })
+  } catch (error) {
+    console.error('Edit with reference error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/wavespeed-variations - Generate multiple variations with Wavespeed
+app.post('/api/gallery-images/:id/wavespeed-variations', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { variationPrompt, numImages } = req.body
+
+    const imageCount = numImages || 4
+    if (imageCount < 1 || imageCount > 15) {
+      return res.status(400).json({ error: 'Number of images must be between 1 and 15' })
+    }
+
+    // Get the original image
+    const { data: originalImage, error: fetchError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !originalImage) {
+      return res.status(404).json({ error: 'Image not found' })
+    }
+
+    console.log('Starting Wavespeed variations...')
+    console.log('Input image:', originalImage.image_url)
+    console.log('Variation prompt:', variationPrompt)
+    console.log('Number of images:', imageCount)
+
+    // Build the prompt with image count
+    const fullPrompt = variationPrompt
+      ? `${imageCount} images: ${variationPrompt}`
+      : `${imageCount} images with subtle variations`
+
+    // Call Wavespeed API for sequential editing
+    const wavespeedResponse = await axios.post(
+      'https://api.wavespeed.ai/api/v3/bytedance/seedream-v4/edit-sequential',
+      {
+        prompt: fullPrompt,
+        images: [originalImage.image_url],
+        max_images: imageCount,
+        enable_sync_mode: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const outputUrls = wavespeedResponse.data.data.outputs
+
+    // Create a batch ID for these variations
+    const batchId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+    // Process each generated image
+    const newImages = []
+    for (let i = 0; i < outputUrls.length; i++) {
+      const imageUrl = outputUrls[i]
+
+      // Download the result
+      const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' })
+      const imageBuffer = Buffer.from(imageResponse.data)
+
+      // Upload to Supabase Storage
+      const timestamp = Date.now()
+      const storagePath = `wavespeed_var_${timestamp}_${i}.png`
+
+      const { error: uploadError } = await supabase.storage
+        .from('generated-images')
+        .upload(storagePath, imageBuffer, {
+          contentType: 'image/png',
+          upsert: false
+        })
+
+      if (uploadError) throw uploadError
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from('generated-images')
+        .getPublicUrl(storagePath)
+
+      // Insert new image into generated_images
+      const { data: newImage, error: insertError } = await supabase
+        .from('generated_images')
+        .insert({
+          parent_image_id: originalImage.id,
+          model_id: originalImage.model_id,
+          image_url: publicUrlData.publicUrl,
+          storage_path: storagePath,
+          prompt_used: fullPrompt,
+          negative_prompt_used: originalImage.negative_prompt_used,
+          parameters: {
+            ...originalImage.parameters,
+            wavespeed_variation_prompt: variationPrompt,
+            variation_index: i + 1
+          },
+          model_name: originalImage.model_name,
+          model_slug: originalImage.model_slug,
+          edit_type: 'wavespeed_variation',
+          batch_id: batchId
+        })
+        .select()
+        .single()
+
+      if (insertError) throw insertError
+      newImages.push(newImage)
+    }
+
+    res.json({ success: true, images: newImages, count: newImages.length })
+  } catch (error) {
+    console.error('Wavespeed variations error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/carousel-variations - Generate carousel variations (minimal changes, high consistency)
+app.post('/api/gallery-images/:id/carousel-variations', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { variationPrompt, numImages } = req.body
+
+    const imageCount = numImages || 3
+    if (imageCount < 2 || imageCount > 7) {
+      return res.status(400).json({ error: 'Number of images must be between 2 and 7' })
+    }
+
+    // Get the original image
+    const { data: originalImage, error: fetchError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !originalImage) {
+      return res.status(404).json({ error: 'Image not found' })
+    }
+
+    console.log('Starting Carousel variations...')
+    console.log('Input image:', originalImage.image_url)
+    console.log('Variation prompt:', variationPrompt)
+    console.log('Number of images:', imageCount)
+
+    // Build highly specific prompt for consistency
+    const userVariation = variationPrompt || 'different camera angle, facial expression, and pose'
+    const fullPrompt = `${imageCount} images: KEEP EXACT SAME: background, clothing, lighting, style, quality. ONLY CHANGE: ${userVariation}. Maintain perfect consistency.`
+
+    console.log('Full carousel prompt:', fullPrompt)
+
+    // Call Wavespeed API for sequential editing with consistency emphasis
+    const wavespeedResponse = await axios.post(
+      'https://api.wavespeed.ai/api/v3/bytedance/seedream-v4/edit-sequential',
+      {
+        prompt: fullPrompt,
+        images: [originalImage.image_url],
+        max_images: imageCount,
+        enable_sync_mode: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const outputUrls = wavespeedResponse.data.data.outputs
+
+    // Inherit batch ID from parent if it exists, otherwise create new carousel batch
+    const batchId = originalImage.batch_id || `carousel_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+    // Process each generated image
+    const newImages = []
+    for (let i = 0; i < outputUrls.length; i++) {
+      const imageUrl = outputUrls[i]
+
+      // Download the result
+      const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' })
+      const imageBuffer = Buffer.from(imageResponse.data)
+
+      // Upload to Supabase Storage
+      const timestamp = Date.now()
+      const storagePath = `carousel_${timestamp}_${i}.png`
+
+      const { error: uploadError } = await supabase.storage
+        .from('generated-images')
+        .upload(storagePath, imageBuffer, {
+          contentType: 'image/png',
+          upsert: false
+        })
+
+      if (uploadError) throw uploadError
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from('generated-images')
+        .getPublicUrl(storagePath)
+
+      // Insert new image into generated_images
+      const { data: newImage, error: insertError } = await supabase
+        .from('generated_images')
+        .insert({
+          parent_image_id: originalImage.id,
+          model_id: originalImage.model_id,
+          image_url: publicUrlData.publicUrl,
+          storage_path: storagePath,
+          prompt_used: fullPrompt,
+          negative_prompt_used: originalImage.negative_prompt_used,
+          parameters: {
+            ...originalImage.parameters,
+            carousel_variation_prompt: variationPrompt,
+            carousel_index: i + 1,
+            is_carousel: true
+          },
+          model_name: originalImage.model_name,
+          model_slug: originalImage.model_slug,
+          edit_type: 'carousel_variation',
+          batch_id: batchId,
+          reference_filename: originalImage.reference_filename
+        })
+        .select()
+        .single()
+
+      if (insertError) throw insertError
+      newImages.push(newImage)
+    }
+
+    console.log(`✅ Carousel complete: ${newImages.length} images created in batch ${batchId}`)
+    res.json({ success: true, images: newImages, count: newImages.length, batchId })
+  } catch (error) {
+    console.error('Carousel variations error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -384,6 +997,7 @@ app.post('/api/jobs/:id/check', async (req, res) => {
 
       // Find the SaveImage node output (node 12 in our workflow)
       let supabaseImageUrl = null
+      let storagePath = null
       if (outputs['12']?.images?.[0]) {
         const image = outputs['12'].images[0]
         const comfyImageUrl = `${COMFYUI_API_URL}/view?filename=${image.filename}&subfolder=${image.subfolder || ''}&type=${image.type || 'output'}`
@@ -397,7 +1011,7 @@ app.post('/api/jobs/:id/check', async (req, res) => {
 
           // Upload to Supabase Storage
           const imageBuffer = Buffer.from(imageResponse.data)
-          const storagePath = `${image.filename}`
+          storagePath = `${image.filename}`
 
           const { data: uploadData, error: uploadError } = await supabase.storage
             .from('generated-images')
@@ -456,7 +1070,8 @@ app.post('/api/jobs/:id/check', async (req, res) => {
             model_slug: updatedJob.models?.slug,
             reference_filename: updatedJob.reference_images?.filename,
             reference_caption: updatedJob.reference_images?.vision_description,
-            generated_at: updatedJob.completed_at
+            generated_at: updatedJob.completed_at,
+            batch_id: updatedJob.batch_id
           })
       }
 
@@ -476,6 +1091,39 @@ app.post('/api/jobs/:id/check', async (req, res) => {
     }
   } catch (error) {
     console.error('Check status error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/jobs/clear-stuck - Clear all stuck processing jobs
+app.post('/api/jobs/clear-stuck', async (req, res) => {
+  try {
+    // Mark jobs older than 15 minutes still processing as failed
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+
+    const { data: stuckJobs } = await supabase
+      .from('generation_jobs')
+      .select('id, created_at')
+      .eq('status', 'processing')
+      .lt('started_at', fifteenMinutesAgo)
+
+    if (!stuckJobs || stuckJobs.length === 0) {
+      return res.json({ message: 'No stuck jobs found', count: 0 })
+    }
+
+    const { error } = await supabase
+      .from('generation_jobs')
+      .update({
+        status: 'failed',
+        error_message: 'Job timed out or was cleared from queue'
+      })
+      .eq('status', 'processing')
+      .lt('started_at', fifteenMinutesAgo)
+
+    if (error) throw error
+
+    res.json({ message: `Cleared ${stuckJobs.length} stuck jobs`, count: stuckJobs.length })
+  } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
@@ -631,6 +1279,412 @@ app.delete('/api/content-types/:id', async (req, res) => {
     if (error) throw error
     res.json({ success: true })
   } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/enhance-prompt - Enhance prompts with Grok AI
+app.post('/api/enhance-prompt', async (req, res) => {
+  try {
+    const { prompt } = req.body
+
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({ error: 'Prompt is required' })
+    }
+
+    console.log('Enhancing prompt:', prompt)
+
+    const grokResponse = await axios.post(
+      'https://api.x.ai/v1/chat/completions',
+      {
+        model: 'grok-2-latest',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert prompt engineer for Bytedance Seedream V4 image editing AI. Seedream excels at realistic image modifications when given clear, detailed instructions. When given a brief editing request, enhance it to be more effective for Seedream by:
+
+1. Being specific about what to change and how
+2. Mentioning texture, lighting, and blend requirements to maintain realism
+3. Specifying quality expectations (natural, seamless, photorealistic)
+4. Keeping instructions clear and actionable
+
+Return ONLY the enhanced prompt text, no explanations or quotes.`
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.7
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GROK_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const enhancedPrompt = grokResponse.data.choices[0].message.content
+
+    console.log('Enhanced prompt:', enhancedPrompt)
+
+    res.json({
+      original: prompt,
+      enhanced: enhancedPrompt
+    })
+  } catch (error) {
+    console.error('Grok API error:', error.response?.data || error.message)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/smart-blend - Smart blend two images with Grok Vision + Wavespeed
+app.post('/api/smart-blend', async (req, res) => {
+  try {
+    const { sourceImageId, referenceImageId, instruction, numVariations } = req.body
+
+    console.log('Smart Blend:', { sourceImageId, referenceImageId, instruction, numVariations })
+
+    // Get both images from database
+    const { data: sourceImage } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', sourceImageId)
+      .single()
+
+    const { data: referenceImage } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', referenceImageId)
+      .single()
+
+    if (!sourceImage || !referenceImage) {
+      return res.status(404).json({ error: 'Images not found' })
+    }
+
+    console.log('Analyzing images with Grok Vision...')
+
+    // Use Grok Vision to analyze both images and create transfer prompt
+    const grokResponse = await axios.post(
+      'https://api.x.ai/v1/chat/completions',
+      {
+        model: 'grok-2-vision-1212',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert at analyzing images and creating precise image editing instructions for Bytedance Seedream V4.
+
+Your task: User has two images and wants to transfer specific elements from image 2 to image 1. Based on the user's instruction, analyze both images and create a SIMPLE, FOCUSED editing prompt.
+
+IMPORTANT RULES:
+- Only describe the specific transfer requested
+- DO NOT add lighting adjustments, texture improvements, or quality mentions
+- Keep it concise and actionable
+- Return ONLY the editing prompt, no explanations`
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `User wants to: "${instruction}"
+
+IMAGE 1 (keep everything from this image):
+`
+              },
+              {
+                type: 'image_url',
+                image_url: { url: sourceImage.image_url }
+              },
+              {
+                type: 'text',
+                text: `\nIMAGE 2 (reference for the element to transfer):
+`
+              },
+              {
+                type: 'image_url',
+                image_url: { url: referenceImage.image_url }
+              },
+              {
+                type: 'text',
+                text: `\n\nCreate a SHORT prompt that changes ONLY the requested element in image 1 to match what's in image 2. Keep everything else from image 1 exactly the same.`
+              }
+            ]
+          }
+        ],
+        temperature: 0.7
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GROK_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const editingPrompt = grokResponse.data.choices[0].message.content
+    console.log('Generated editing prompt:', editingPrompt)
+
+    // Call Wavespeed with the generated prompt
+    console.log(`Calling Wavespeed for ${numVariations} variation(s)...`)
+
+    const wavespeedResponse = await axios.post(
+      'https://api.wavespeed.ai/api/v3/bytedance/seedream-v4/edit-sequential',
+      {
+        prompt: `${numVariations} images: ${editingPrompt}`,
+        images: [sourceImage.image_url, referenceImage.image_url],
+        max_images: numVariations,
+        enable_sync_mode: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const outputUrls = wavespeedResponse.data.data.outputs
+    // Inherit batch_id from source image if it exists, otherwise create new batch for multi-image results
+    const batchId = numVariations > 1 ? (sourceImage.batch_id || `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`) : sourceImage.batch_id
+
+    console.log(`Received ${outputUrls.length} images from Wavespeed`)
+
+    // Download and upload each result
+    const newImages = []
+    for (let i = 0; i < outputUrls.length; i++) {
+      const imageUrl = outputUrls[i]
+      const timestamp = Date.now()
+      const filename = `smart_blend_${timestamp}_${i}.png`
+
+      // Download image
+      const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' })
+      const imageBuffer = Buffer.from(imageResponse.data)
+
+      // Upload to Supabase
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('generated-images')
+        .upload(filename, imageBuffer, {
+          contentType: 'image/png',
+          upsert: false
+        })
+
+      if (uploadError) throw uploadError
+
+      const { data: publicUrlData } = supabase.storage
+        .from('generated-images')
+        .getPublicUrl(filename)
+
+      // Insert into database
+      const { data: newImage } = await supabase
+        .from('generated_images')
+        .insert({
+          model_id: sourceImage.model_id,
+          image_url: publicUrlData.publicUrl,
+          storage_path: filename,
+          prompt_used: sourceImage.prompt_used,
+          negative_prompt_used: sourceImage.negative_prompt_used,
+          parameters: {
+            ...sourceImage.parameters,
+            smart_blend_instruction: instruction,
+            smart_blend_prompt: editingPrompt,
+            variation_index: i + 1
+          },
+          parent_image_id: sourceImage.id,
+          edit_type: 'smart_blend',
+          batch_id: batchId,
+          group_id: sourceImage.group_id,
+          created_at: new Date().toISOString()
+        })
+        .select()
+        .single()
+
+      newImages.push(newImage)
+    }
+
+    console.log(`Smart Blend complete: ${newImages.length} images created`)
+
+    res.json({
+      success: true,
+      images: newImages,
+      count: newImages.length,
+      editingPrompt
+    })
+  } catch (error) {
+    console.error('Smart Blend error:', error.response?.data || error.message)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/group - Manually group multiple images together
+app.post('/api/gallery-images/group', async (req, res) => {
+  try {
+    const { imageIds } = req.body
+
+    if (!imageIds || imageIds.length < 2) {
+      return res.status(400).json({ error: 'At least 2 image IDs required' })
+    }
+
+    // Create a unique group ID
+    const groupId = `manual_group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+    console.log(`Creating manual group ${groupId} with ${imageIds.length} images`)
+
+    // Update all selected images with the same group_id
+    const { error: updateError } = await supabase
+      .from('generated_images')
+      .update({ group_id: groupId })
+      .in('id', imageIds)
+
+    if (updateError) throw updateError
+
+    console.log(`✅ Grouped ${imageIds.length} images with group_id: ${groupId}`)
+    res.json({ success: true, groupId, count: imageIds.length })
+  } catch (error) {
+    console.error('Group images error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/gallery-images/:id/face-swap-group - Face swap all images in the same group
+app.post('/api/gallery-images/:id/face-swap-group', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { faceSourceUrl } = req.body
+
+    // Get the source image to find its group
+    const { data: sourceImage, error: fetchError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !sourceImage) {
+      return res.status(404).json({ error: 'Image not found' })
+    }
+
+    // Find group_id or batch_id
+    const groupIdentifier = sourceImage.group_id || sourceImage.batch_id
+    if (!groupIdentifier) {
+      return res.status(400).json({ error: 'Image is not part of a group' })
+    }
+
+    // Get all images in the same group
+    let query = supabase
+      .from('generated_images')
+      .select('*')
+
+    if (sourceImage.group_id) {
+      query = query.eq('group_id', sourceImage.group_id)
+    } else {
+      query = query.eq('batch_id', sourceImage.batch_id)
+    }
+
+    const { data: groupImages, error: groupError } = await query
+
+    if (groupError) throw groupError
+
+    console.log(`Face swapping ${groupImages.length} images in group ${groupIdentifier}`)
+
+    // Default face source URL
+    const swapFaceUrl = faceSourceUrl || `${process.env.SUPABASE_URL}/storage/v1/object/public/face-sources/source.jpg`
+
+    // Face swap each image
+    const results = []
+    for (const image of groupImages) {
+      try {
+        // Run face swap with Replicate
+        const output = await replicate.run(
+          "cdingram/face-swap:d1d6ea8c8be89d664a07a457526f7128109dee7030fdac424788d762c71ed111",
+          {
+            input: {
+              input_image: image.image_url,
+              swap_image: swapFaceUrl
+            }
+          }
+        )
+
+        // Download the result
+        const imageResponse = await axios.get(output, { responseType: 'arraybuffer' })
+        const imageBuffer = Buffer.from(imageResponse.data)
+
+        // Upload to Supabase Storage
+        const timestamp = Date.now()
+        const storagePath = `face_swap_${timestamp}_${image.id}.png`
+
+        const { error: uploadError } = await supabase.storage
+          .from('generated-images')
+          .upload(storagePath, imageBuffer, {
+            contentType: 'image/png',
+            upsert: false
+          })
+
+        if (uploadError) throw uploadError
+
+        // Get public URL
+        const { data: publicUrlData } = supabase.storage
+          .from('generated-images')
+          .getPublicUrl(storagePath)
+
+        // Insert new image
+        const { data: newImage, error: insertError } = await supabase
+          .from('generated_images')
+          .insert({
+            parent_image_id: image.id,
+            model_id: image.model_id,
+            image_url: publicUrlData.publicUrl,
+            storage_path: storagePath,
+            prompt_used: image.prompt_used,
+            negative_prompt_used: image.negative_prompt_used,
+            parameters: image.parameters,
+            model_name: image.model_name,
+            model_slug: image.model_slug,
+            edit_type: 'face_swap',
+            face_swap_source: swapFaceUrl,
+            batch_id: image.batch_id,
+            group_id: image.group_id
+          })
+          .select()
+          .single()
+
+        if (insertError) throw insertError
+
+        results.push({ success: true, originalId: image.id, newImageId: newImage.id })
+      } catch (err) {
+        console.error(`Failed to face swap image ${image.id}:`, err)
+        results.push({ success: false, originalId: image.id, error: err.message })
+      }
+    }
+
+    const succeeded = results.filter(r => r.success).length
+    const failed = results.filter(r => !r.success).length
+
+    // Auto-delete all original images that were successfully face swapped
+    const successfulOriginalIds = results.filter(r => r.success).map(r => r.originalId)
+    if (successfulOriginalIds.length > 0) {
+      await supabase
+        .from('generated_images')
+        .update({
+          is_deleted: true,
+          deleted_at: new Date().toISOString()
+        })
+        .in('id', successfulOriginalIds)
+
+      console.log(`✅ Auto-deleted ${successfulOriginalIds.length} original images`)
+    }
+
+    console.log(`✅ Face swap group complete: ${succeeded} succeeded, ${failed} failed`)
+
+    res.json({
+      success: true,
+      total: groupImages.length,
+      succeeded,
+      failed,
+      results
+    })
+  } catch (error) {
+    console.error('Face swap group error:', error)
     res.status(500).json({ error: error.message })
   }
 })
