@@ -96,6 +96,42 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
   }
 })
 
+// POST /api/upload-face - Upload face image to Supabase Storage
+app.post('/api/upload-face', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' })
+    }
+
+    const timestamp = Date.now()
+    const filename = `face_${timestamp}_${req.file.originalname}`
+
+    const { data, error } = await supabase.storage
+      .from('face-images')
+      .upload(filename, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      })
+
+    if (error) throw error
+
+    const { data: publicUrlData } = supabase.storage
+      .from('face-images')
+      .getPublicUrl(filename)
+
+    res.json({
+      success: true,
+      url: publicUrlData.publicUrl
+    })
+  } catch (error) {
+    console.error('Face upload error:', error)
+    res.status(500).json({
+      error: 'Failed to upload face image',
+      details: error.message
+    })
+  }
+})
+
 // POST /api/generate - Queue a new generation job
 app.post('/api/generate', async (req, res) => {
   try {
@@ -222,7 +258,7 @@ app.get('/api/jobs', async (req, res) => {
         *,
         models (name, slug),
         workflows (name, slug),
-        reference_images (filename, storage_path)
+        reference_images (filename, storage_path, vision_description)
       `)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -252,6 +288,21 @@ app.get('/api/jobs/:id', async (req, res) => {
     }
 
     res.json(job)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/gallery-images - Get all gallery images (from generated_images table)
+app.get('/api/gallery-images', async (req, res) => {
+  try {
+    const { data: images } = await supabase
+      .from('generated_images')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(200)
+
+    res.json(images || [])
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
@@ -290,7 +341,32 @@ app.post('/api/jobs/:id/check', async (req, res) => {
       return res.status(404).json({ error: 'Job not found' })
     }
 
-    // Check status with ComfyUI
+    // First check if still in queue
+    let queueResponse
+    try {
+      queueResponse = await axios.get(
+        `${COMFYUI_API_URL}/queue`,
+        {
+          headers: {
+            'Authorization': `Bearer ${RUNPOD_API_KEY}`
+          }
+        }
+      )
+    } catch (queueError) {
+      console.log('Queue check failed:', queueError.message)
+    }
+
+    // Check if job is still queued or executing
+    if (queueResponse?.data) {
+      const allQueuedJobs = [...(queueResponse.data.queue_running || []), ...(queueResponse.data.queue_pending || [])]
+      const isQueued = allQueuedJobs.some(item => item[1] === job.runpod_job_id || item[2]?.client_id === `job_${job.id}`)
+
+      if (isQueued) {
+        return res.json({ status: 'processing' })
+      }
+    }
+
+    // Check history for completed jobs
     const historyResponse = await axios.get(
       `${COMFYUI_API_URL}/history/${job.runpod_job_id}`,
       {
@@ -357,6 +433,33 @@ app.post('/api/jobs/:id/check', async (req, res) => {
         })
         .eq('id', job.id)
 
+      // Insert into generated_images for gallery
+      const { data: updatedJob } = await supabase
+        .from('generation_jobs')
+        .select('*, models(name, slug), reference_images(filename, vision_description)')
+        .eq('id', job.id)
+        .single()
+
+      if (updatedJob) {
+        await supabase
+          .from('generated_images')
+          .insert({
+            job_id: updatedJob.id,
+            model_id: updatedJob.model_id,
+            reference_image_id: updatedJob.reference_image_id,
+            image_url: supabaseImageUrl,
+            storage_path: storagePath,
+            prompt_used: updatedJob.prompt_used,
+            negative_prompt_used: updatedJob.negative_prompt_used,
+            parameters: updatedJob.parameters,
+            model_name: updatedJob.models?.name,
+            model_slug: updatedJob.models?.slug,
+            reference_filename: updatedJob.reference_images?.filename,
+            reference_caption: updatedJob.reference_images?.vision_description,
+            generated_at: updatedJob.completed_at
+          })
+      }
+
       res.json({ status: 'completed', imageUrl: supabaseImageUrl })
     } else if (history?.status?.status_str === 'error') {
       await supabase
@@ -373,6 +476,161 @@ app.post('/api/jobs/:id/check', async (req, res) => {
     }
   } catch (error) {
     console.error('Check status error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ===== SUB-MODELS ENDPOINTS =====
+
+// GET /api/sub-models - Get all sub-models with their main model
+app.get('/api/sub-models', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('sub_models')
+      .select('*, models(*)')
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/models/:modelId/sub-models - Get sub-models for specific main model
+app.get('/api/models/:modelId/sub-models', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('sub_models')
+      .select('*')
+      .eq('model_id', req.params.modelId)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/sub-models - Create new sub-model
+app.post('/api/sub-models', async (req, res) => {
+  try {
+    const { model_id, name, face_image_url, fanhub_account, description } = req.body
+
+    const { data, error } = await supabase
+      .from('sub_models')
+      .insert({ model_id, name, face_image_url, fanhub_account, description })
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// PUT /api/sub-models/:id - Update sub-model
+app.put('/api/sub-models/:id', async (req, res) => {
+  try {
+    const { name, face_image_url, fanhub_account, description } = req.body
+
+    const { data, error } = await supabase
+      .from('sub_models')
+      .update({ name, face_image_url, fanhub_account, description, updated_at: new Date() })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// DELETE /api/sub-models/:id - Delete sub-model
+app.delete('/api/sub-models/:id', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('sub_models')
+      .delete()
+      .eq('id', req.params.id)
+
+    if (error) throw error
+    res.json({ success: true })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ===== CONTENT TYPES ENDPOINTS =====
+
+// GET /api/sub-models/:subModelId/content-types - Get content types for sub-model
+app.get('/api/sub-models/:subModelId/content-types', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('content_types')
+      .select('*')
+      .eq('sub_model_id', req.params.subModelId)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/content-types - Create new content type
+app.post('/api/content-types', async (req, res) => {
+  try {
+    const { sub_model_id, name, instagram_account, description } = req.body
+
+    const { data, error } = await supabase
+      .from('content_types')
+      .insert({ sub_model_id, name, instagram_account, description })
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// PUT /api/content-types/:id - Update content type
+app.put('/api/content-types/:id', async (req, res) => {
+  try {
+    const { name, instagram_account, description } = req.body
+
+    const { data, error } = await supabase
+      .from('content_types')
+      .update({ name, instagram_account, description, updated_at: new Date() })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// DELETE /api/content-types/:id - Delete content type
+app.delete('/api/content-types/:id', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('content_types')
+      .delete()
+      .eq('id', req.params.id)
+
+    if (error) throw error
+    res.json({ success: true })
+  } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
