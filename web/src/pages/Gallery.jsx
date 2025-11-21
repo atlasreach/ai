@@ -23,6 +23,8 @@ export default function Gallery() {
   const [models, setModels] = useState([])
   const [selectedModel, setSelectedModel] = useState('all')
   const [lightboxJob, setLightboxJob] = useState(null)
+  const [lightboxGroupImages, setLightboxGroupImages] = useState([])
+  const [lightboxCurrentIndex, setLightboxCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(true)
   const [newImagesCount, setNewImagesCount] = useState(0)
   const [showStarredOnly, setShowStarredOnly] = useState(false)
@@ -59,10 +61,26 @@ export default function Gallery() {
   const [showCarouselModal, setShowCarouselModal] = useState(false)
   const [carouselNumImages, setCarouselNumImages] = useState(3)
   const [carouselPrompt, setCarouselPrompt] = useState('')
+  const [reelMode, setReelMode] = useState(false)
+  const [startImage, setStartImage] = useState(null)
+  const [endImage, setEndImage] = useState(null)
+  const [showReelModal, setShowReelModal] = useState(false)
+  const [reelPrompt, setReelPrompt] = useState('')
+  const [reelNegativePrompt, setReelNegativePrompt] = useState('')
+  const [reelDuration, setReelDuration] = useState(5)
+  const [reelQuality, setReelQuality] = useState('standard')
+  const [reelProvider, setReelProvider] = useState('kling')  // 'kling' or 'wavespeed'
+  const [generatingPrompts, setGeneratingPrompts] = useState(false)
+  const [submittingReel, setSubmittingReel] = useState(false)
+  const [videoJobs, setVideoJobs] = useState([])
+  const [loadingVideos, setLoadingVideos] = useState(false)
 
   useEffect(() => {
     fetchData()
-  }, [showStarredOnly])
+    if (activeTab === 'reels') {
+      fetchVideoJobs()
+    }
+  }, [showStarredOnly, activeTab])
 
   useEffect(() => {
     filterJobs()
@@ -227,6 +245,181 @@ export default function Gallery() {
     setShowCarouselModal(false)
     setCarouselPrompt('')
     setCarouselNumImages(3)
+  }
+
+  function enableReelMode() {
+    setReelMode(true)
+    setSelectionMode(false)
+    setSelectedImages([])
+    setStartImage(null)
+    setEndImage(null)
+  }
+
+  function cancelReelMode() {
+    setReelMode(false)
+    setStartImage(null)
+    setEndImage(null)
+  }
+
+  function handleReelImageClick(image) {
+    if (!startImage) {
+      setStartImage(image)
+    } else if (!endImage) {
+      if (image.id === startImage.id) {
+        // Clicking the same image - deselect start
+        setStartImage(null)
+      } else {
+        // Set end image state
+        setEndImage(image)
+        // Auto-switch to Pro mode when end image is selected (required by Kling API)
+        setReelQuality('pro')
+        // Auto-open modal with BOTH images (pass them directly, don't wait for state)
+        openReelModal(startImage, image)
+      }
+    } else {
+      // Reset and start over
+      setStartImage(image)
+      setEndImage(null)
+    }
+  }
+
+  async function openReelModal(start, end) {
+    // Use passed parameters instead of state (fixes timing issue)
+    const startImg = start || startImage
+    const endImg = end || endImage
+
+    setShowReelModal(true)
+    setReelPrompt('')
+    setReelNegativePrompt('')
+
+    console.log('Opening reel modal with:', { startId: startImg?.id, endId: endImg?.id })
+  }
+
+  async function generateReelPrompts() {
+    const startImg = startImage
+    const endImg = endImage
+
+    if (!startImg || !endImg) {
+      alert('Please select both start and end images')
+      return
+    }
+
+    setGeneratingPrompts(true)
+
+    // Generate prompts using Grok Vision with selected provider
+    try {
+      const response = await fetch(`${API_URL}/api/generate-video-prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startImageId: startImg.id,
+          endImageId: endImg.id,
+          provider: reelProvider
+        })
+      })
+
+      const data = await response.json()
+      console.log('Grok response:', data)
+
+      if (data.success) {
+        setReelPrompt(data.positive_prompt)
+        setReelNegativePrompt(data.negative_prompt)
+      } else {
+        console.error('Grok API error:', data)
+        alert('Failed to generate prompts: ' + (data.error || 'Unknown error'))
+      }
+    } catch (error) {
+      console.error('Error generating prompts:', error)
+      alert('Error calling Grok API: ' + error.message)
+    } finally {
+      setGeneratingPrompts(false)
+    }
+  }
+
+  function closeReelModal() {
+    setShowReelModal(false)
+    setReelPrompt('')
+    setReelNegativePrompt('')
+  }
+
+  async function submitReelGeneration() {
+    if (!startImage || !reelPrompt.trim()) {
+      alert('Start image and prompt are required')
+      return
+    }
+
+    setSubmittingReel(true)
+    try {
+      const response = await fetch(`${API_URL}/api/generate-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startImageId: startImage.id,
+          endImageId: endImage?.id || null,
+          modelId: startImage.model_id,
+          positivePrompt: reelPrompt,
+          negativePrompt: reelNegativePrompt,
+          duration: reelDuration,
+          mode: reelQuality,
+          provider: reelProvider
+        })
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        alert(`Video generation started! Job ID: ${result.jobId}. Check the Reels tab in a few minutes.`)
+        closeReelModal()
+        cancelReelMode()
+        // Refresh video jobs if on reels tab
+        if (activeTab === 'reels') {
+          fetchVideoJobs()
+        }
+      } else {
+        alert(`Failed to start video generation: ${result.error}`)
+      }
+    } catch (error) {
+      alert(`Error: ${error.message}`)
+    } finally {
+      setSubmittingReel(false)
+    }
+  }
+
+  async function fetchVideoJobs() {
+    setLoadingVideos(true)
+    try {
+      const response = await fetch(`${API_URL}/api/video-jobs`)
+      const data = await response.json()
+      setVideoJobs(data || [])
+    } catch (error) {
+      console.error('Error fetching video jobs:', error)
+    } finally {
+      setLoadingVideos(false)
+    }
+  }
+
+  async function checkVideoStatus(jobId) {
+    try {
+      const response = await fetch(`${API_URL}/api/video-jobs/${jobId}/check`, {
+        method: 'POST'
+      })
+      const result = await response.json()
+
+      if (result.success) {
+        // Refresh the list
+        fetchVideoJobs()
+
+        if (result.status === 'completed' && result.videoUrl) {
+          alert('Video is ready!')
+        } else if (result.status === 'failed') {
+          alert(`Video generation failed: ${result.error}`)
+        } else {
+          alert(`Status: ${result.status}`)
+        }
+      }
+    } catch (error) {
+      alert(`Error checking status: ${error.message}`)
+    }
   }
 
   async function submitCarouselVariations() {
@@ -524,6 +717,31 @@ export default function Gallery() {
     setSelectedImages([])
   }
 
+  function selectGroup(groupImages) {
+    const groupImageIds = groupImages.map(img => img.id)
+    const allSelected = groupImageIds.every(id => selectedImages.includes(id))
+
+    if (allSelected) {
+      // Deselect all images in this group
+      setSelectedImages(prev => prev.filter(id => !groupImageIds.includes(id)))
+    } else {
+      // Select all images in this group
+      setSelectedImages(prev => {
+        const newSelection = [...prev]
+        groupImageIds.forEach(id => {
+          if (!newSelection.includes(id)) {
+            newSelection.push(id)
+          }
+        })
+        return newSelection
+      })
+      // Enable selection mode if not already enabled
+      if (!selectionMode) {
+        setSelectionMode(true)
+      }
+    }
+  }
+
   async function bulkDelete() {
     if (selectedImages.length === 0) return
     if (!confirm(`Delete ${selectedImages.length} images?`)) return
@@ -615,11 +833,42 @@ export default function Gallery() {
   function openLightbox(job) {
     setLightboxJob(job)
     setShowDetails(false)
+
+    // Find all images in the same batch/group for slideshow
+    const batchId = job.batch_id || job.group_id
+    if (batchId) {
+      const groupImages = jobs.filter(j =>
+        (j.batch_id === batchId || j.group_id === batchId) && !j.is_deleted
+      )
+      setLightboxGroupImages(groupImages)
+      // Find current image index
+      const currentIndex = groupImages.findIndex(img => img.id === job.id)
+      setLightboxCurrentIndex(currentIndex >= 0 ? currentIndex : 0)
+    } else {
+      setLightboxGroupImages([job])
+      setLightboxCurrentIndex(0)
+    }
   }
 
   function closeLightbox() {
     setLightboxJob(null)
+    setLightboxGroupImages([])
+    setLightboxCurrentIndex(0)
     setShowDetails(false)
+  }
+
+  function nextImage() {
+    if (lightboxGroupImages.length === 0) return
+    const nextIndex = (lightboxCurrentIndex + 1) % lightboxGroupImages.length
+    setLightboxCurrentIndex(nextIndex)
+    setLightboxJob(lightboxGroupImages[nextIndex])
+  }
+
+  function prevImage() {
+    if (lightboxGroupImages.length === 0) return
+    const prevIndex = (lightboxCurrentIndex - 1 + lightboxGroupImages.length) % lightboxGroupImages.length
+    setLightboxCurrentIndex(prevIndex)
+    setLightboxJob(lightboxGroupImages[prevIndex])
   }
 
   function groupByBatch(images) {
@@ -663,8 +912,12 @@ export default function Gallery() {
   function getFilteredByTab(images) {
     if (activeTab === 'all') return images
     if (activeTab === 'originals') {
-      // Show only images without edit_type (base generations)
-      return images.filter(img => !img.edit_type && !img.parent_image_id)
+      // Show only images without edit_type (base generations) and not manually grouped
+      return images.filter(img =>
+        !img.edit_type &&
+        !img.parent_image_id &&
+        !(img.group_id && img.group_id.startsWith('manual_group_'))
+      )
     }
     if (activeTab === 'edited') {
       // Show only images with edit_type or parent_image_id
@@ -771,9 +1024,21 @@ export default function Gallery() {
             </>
           )}
           <button
+            onClick={enableReelMode}
+            disabled={reelMode}
+            className={`px-3 py-2 rounded-lg text-sm font-medium ${
+              reelMode
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-800 hover:bg-gray-700 border border-gray-700'
+            }`}
+          >
+            🎬 Create Reel
+          </button>
+          <button
             onClick={() => {
               setSelectionMode(!selectionMode)
               setSelectedImages([])
+              setReelMode(false)
             }}
             className={`px-3 py-2 rounded-lg text-sm ${
               selectionMode
@@ -794,6 +1059,43 @@ export default function Gallery() {
           </div>
         </div>
       </div>
+
+      {/* Reel Mode Banner */}
+      {reelMode && (
+        <div className="mb-4 bg-purple-500/20 border border-purple-500 rounded-lg px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-purple-400 font-medium mb-1">
+                🎬 Reel Mode Active
+              </div>
+              <div className="text-sm text-gray-300">
+                {!startImage && 'Click an image to select as START frame'}
+                {startImage && !endImage && 'Click another image to select as END frame'}
+                {startImage && endImage && 'Both frames selected! Configuring video...'}
+              </div>
+              {startImage && (
+                <div className="mt-2 text-xs text-gray-400">
+                  <span className="inline-block w-3 h-3 bg-purple-500 rounded-full mr-1"></span>
+                  Start frame selected
+                  {endImage && (
+                    <>
+                      <span className="mx-2">→</span>
+                      <span className="inline-block w-3 h-3 bg-blue-500 rounded-full mr-1"></span>
+                      End frame selected
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={cancelReelMode}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mb-6 flex gap-2 border-b border-gray-700">
@@ -837,10 +1139,132 @@ export default function Gallery() {
           >
             Groups
           </button>
+          <button
+            onClick={() => setActiveTab('reels')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'reels'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            🎬 Reels {videoJobs.length > 0 && `(${videoJobs.length})`}
+          </button>
         </div>
 
+      {/* Reels Tab Content */}
+      {activeTab === 'reels' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">Generated Reels</h2>
+            <button
+              onClick={fetchVideoJobs}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
+            >
+              🔄 Refresh
+            </button>
+          </div>
+
+          {loadingVideos ? (
+            <div className="text-center py-12">Loading reels...</div>
+          ) : videoJobs.length === 0 ? (
+            <div className="text-center py-12 bg-gray-800 rounded-lg">
+              <p className="text-gray-400 mb-4">No reels generated yet</p>
+              <p className="text-sm text-gray-500">Click "🎬 Create Reel" to generate your first video</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {videoJobs.map(job => (
+                <div key={job.id} className="bg-gray-800 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                      job.status === 'processing' ? 'bg-blue-500/20 text-blue-400' :
+                      job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                      'bg-gray-500/20 text-gray-400'
+                    }`}>
+                      {job.status}
+                    </span>
+                    <span className="text-xs text-gray-500">Job #{job.id}</span>
+                  </div>
+
+                  {job.status === 'completed' && job.video_url ? (
+                    <div className="aspect-video bg-black rounded-lg overflow-hidden">
+                      <video controls className="w-full h-full" src={job.video_url}>
+                        Your browser does not support the video tag.
+                      </video>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {job.start_image && (
+                        <div>
+                          <div className="text-xs text-purple-400 mb-1">Start</div>
+                          <img
+                            src={job.start_image.image_url}
+                            alt="Start frame"
+                            className="w-full aspect-square object-cover rounded border-2 border-purple-500/50"
+                          />
+                        </div>
+                      )}
+                      {job.end_image && (
+                        <div>
+                          <div className="text-xs text-blue-400 mb-1">End</div>
+                          <img
+                            src={job.end_image.image_url}
+                            alt="End frame"
+                            className="w-full aspect-square object-cover rounded border-2 border-blue-500/50"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="text-sm">
+                    <div className="text-gray-400 font-medium mb-1">Prompt:</div>
+                    <div className="text-gray-300 text-xs line-clamp-2">{job.positive_prompt}</div>
+                  </div>
+
+                  <div className="flex gap-2 text-xs text-gray-500">
+                    <span className="px-2 py-1 bg-gray-700 rounded">{job.duration}s</span>
+                    <span className="px-2 py-1 bg-gray-700 rounded">{job.mode}</span>
+                  </div>
+
+                  <div className="flex gap-2">
+                    {job.status === 'processing' && (
+                      <button
+                        onClick={() => checkVideoStatus(job.id)}
+                        className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm"
+                      >
+                        Check Status
+                      </button>
+                    )}
+                    {job.status === 'completed' && job.video_url && (
+                      <a
+                        href={job.video_url}
+                        download
+                        className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 rounded text-sm text-center"
+                      >
+                        Download
+                      </a>
+                    )}
+                    {job.status === 'failed' && (
+                      <div className="flex-1 text-xs text-red-400 px-3 py-2">
+                        {job.error || 'Generation failed'}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-gray-600">
+                    Created: {new Date(job.created_at).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Gallery Grid */}
-      {loading ? (
+      {activeTab !== 'reels' && loading ? (
         <div className="text-center py-12 text-gray-400">Loading...</div>
       ) : filteredJobs.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
@@ -855,9 +1279,33 @@ export default function Gallery() {
           return (
             <div className="space-y-6">
                 {/* Batched variations */}
-                {Object.entries(batches).map(([batchId, batchImages]) => (
+                {Object.entries(batches).map(([batchId, batchImages]) => {
+                  const groupImageIds = batchImages.map(img => img.id)
+                  const allSelected = groupImageIds.every(id => selectedImages.includes(id))
+                  const someSelected = groupImageIds.some(id => selectedImages.includes(id))
+
+                  return (
                   <div key={batchId} className="bg-gray-800/30 rounded-lg p-3">
                     <div className="flex items-center gap-2 mb-2">
+                      <div
+                        className="flex items-center justify-center w-5 h-5 cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          selectGroup(batchImages)
+                        }}
+                        title={allSelected ? "Deselect all in group" : "Select all in group"}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          ref={input => {
+                            if (input) input.indeterminate = someSelected && !allSelected
+                          }}
+                          onChange={() => selectGroup(batchImages)}
+                          className="w-5 h-5 cursor-pointer"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
                       <span className="text-xs text-gray-400">Variations</span>
                       <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
                         {batchImages.length} images
@@ -867,9 +1315,21 @@ export default function Gallery() {
                       {batchImages.map(job => (
                         <div
                           key={job.id}
-                          onClick={() => selectionMode ? toggleImageSelection(job.id) : openLightbox(job)}
+                          onClick={() => {
+                            if (reelMode) {
+                              handleReelImageClick(job)
+                            } else if (selectionMode) {
+                              toggleImageSelection(job.id)
+                            } else {
+                              openLightbox(job)
+                            }
+                          }}
                           className={`relative aspect-square bg-gray-800 rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-500 transition-all group ${
                             selectedImages.includes(job.id) ? 'ring-2 ring-green-500' : ''
+                          } ${
+                            reelMode && startImage?.id === job.id ? 'ring-4 ring-purple-500' : ''
+                          } ${
+                            reelMode && endImage?.id === job.id ? 'ring-4 ring-blue-500' : ''
                           }`}
                         >
                           {selectionMode && (
@@ -941,7 +1401,8 @@ export default function Gallery() {
                       ))}
                     </div>
                   </div>
-                ))}
+                  )
+                })}
 
                 {/* Ungrouped individual images */}
                 {ungrouped.length > 0 && (
@@ -949,9 +1410,21 @@ export default function Gallery() {
                     {ungrouped.map(job => (
                       <div
                         key={job.id}
-                        onClick={() => selectionMode ? toggleImageSelection(job.id) : openLightbox(job)}
+                        onClick={() => {
+                          if (reelMode) {
+                            handleReelImageClick(job)
+                          } else if (selectionMode) {
+                            toggleImageSelection(job.id)
+                          } else {
+                            openLightbox(job)
+                          }
+                        }}
                         className={`relative aspect-square bg-gray-800 rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-500 transition-all group ${
                           selectedImages.includes(job.id) ? 'ring-2 ring-green-500' : ''
+                        } ${
+                          reelMode && startImage?.id === job.id ? 'ring-4 ring-purple-500' : ''
+                        } ${
+                          reelMode && endImage?.id === job.id ? 'ring-4 ring-blue-500' : ''
                         }`}
                       >
                         {selectionMode && (
@@ -1030,70 +1503,97 @@ export default function Gallery() {
         })()
       )}
 
-      {/* Lightbox Modal */}
+      {/* Lightbox Modal - Full Screen Slideshow */}
       {lightboxJob && (
-        <div
-          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
-          onClick={closeLightbox}
-        >
-          <div
-            className="bg-gray-900 rounded-lg max-w-6xl w-full max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6">
-              {/* Close Button */}
+        <div className="fixed inset-0 bg-black z-50 flex">
+          {/* Main Image Area - Left Side */}
+          <div className="flex-1 relative flex items-center justify-center">
+            {/* Close Button */}
+            <button
+              onClick={closeLightbox}
+              className="absolute top-4 left-4 z-10 bg-black/50 hover:bg-black/70 rounded-full p-2 text-white"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            {/* Image Counter */}
+            {lightboxGroupImages.length > 1 && (
+              <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-black/50 px-4 py-2 rounded-full text-white text-sm">
+                {lightboxCurrentIndex + 1} / {lightboxGroupImages.length}
+              </div>
+            )}
+
+            {/* Previous Button */}
+            {lightboxGroupImages.length > 1 && (
               <button
-                onClick={closeLightbox}
-                className="float-right text-gray-400 hover:text-white"
+                onClick={prevImage}
+                className="absolute left-8 top-1/2 transform -translate-y-1/2 bg-black/50 hover:bg-black/70 rounded-full p-3 text-white z-10"
               >
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
+            )}
 
-              <h2 className="text-2xl font-bold mb-4">{lightboxJob.model_name}</h2>
+            {/* Next Button */}
+            {lightboxGroupImages.length > 1 && (
+              <button
+                onClick={nextImage}
+                className="absolute right-8 top-1/2 transform -translate-y-1/2 bg-black/50 hover:bg-black/70 rounded-full p-3 text-white z-10"
+              >
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            )}
 
-              {/* Generated Image */}
-              <div className="mb-6 relative">
-                {lightboxJob.image_url ? (
-                  <>
-                    <img
-                      src={lightboxJob.image_url}
-                      alt="Generated"
-                      className="w-full rounded-lg max-h-[60vh] object-contain"
-                    />
-                    {lightboxJob.edit_type && (
-                      <div className="absolute top-3 left-3 flex gap-2">
-                        {lightboxJob.edit_type === 'face_swap' && (
-                          <span className="px-3 py-1.5 bg-blue-600/90 backdrop-blur-sm rounded-lg text-sm font-medium">
-                            👤 Face Swapped
-                          </span>
-                        )}
-                        {lightboxJob.edit_type === 'wavespeed_edit' && (
-                          <span className="px-3 py-1.5 bg-purple-600/90 backdrop-blur-sm rounded-lg text-sm font-medium">
-                            ✏️ Edited
-                          </span>
-                        )}
-                        {lightboxJob.edit_type === 'wavespeed_variation' && (
-                          <span className="px-3 py-1.5 bg-green-600/90 backdrop-blur-sm rounded-lg text-sm font-medium">
-                            🎨 Variation
-                          </span>
-                        )}
-                        {lightboxJob.edit_type === 'carousel_variation' && (
-                          <span className="px-3 py-1.5 bg-blue-500/90 backdrop-blur-sm rounded-lg text-sm font-medium">
-                            📸 Carousel
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="aspect-square bg-gray-800 rounded-lg flex items-center justify-center">
-                    <span className="text-gray-500">No image</span>
-                  </div>
-                )}
-              </div>
+            {/* Main Image */}
+            <div className="relative">
+              {lightboxJob.image_url ? (
+                <img
+                  src={lightboxJob.image_url}
+                  alt="Generated"
+                  className="max-w-[85vw] max-h-[95vh] object-contain"
+                />
+              ) : (
+                <div className="w-96 h-96 bg-gray-800 rounded-lg flex items-center justify-center">
+                  <span className="text-gray-500">No image</span>
+                </div>
+              )}
 
+              {/* Edit Type Badge */}
+              {lightboxJob.edit_type && (
+                <div className="absolute top-3 left-3 flex gap-2">
+                  {lightboxJob.edit_type === 'face_swap' && (
+                    <span className="px-3 py-1.5 bg-blue-600/90 backdrop-blur-sm rounded-lg text-sm font-medium">
+                      👤 Face Swapped
+                    </span>
+                  )}
+                  {lightboxJob.edit_type === 'wavespeed_edit' && (
+                    <span className="px-3 py-1.5 bg-purple-600/90 backdrop-blur-sm rounded-lg text-sm font-medium">
+                      ✏️ Edited
+                    </span>
+                  )}
+                  {lightboxJob.edit_type === 'wavespeed_variation' && (
+                    <span className="px-3 py-1.5 bg-green-600/90 backdrop-blur-sm rounded-lg text-sm font-medium">
+                      🎨 Variation
+                    </span>
+                  )}
+                  {lightboxJob.edit_type === 'carousel_variation' && (
+                    <span className="px-3 py-1.5 bg-blue-500/90 backdrop-blur-sm rounded-lg text-sm font-medium">
+                      📸 Carousel
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Sidebar - Right Side */}
+          <div className="w-96 bg-gray-900 overflow-y-auto">
+            <div className="p-6">
               {/* Action Buttons */}
               <div className="flex gap-2 mb-6 flex-wrap">
                 <button
@@ -1114,16 +1614,6 @@ export default function Gallery() {
                 >
                   {faceSwapping ? '⏳ Face Swapping...' : '👤 Face Swap'}
                 </button>
-
-                {(lightboxJob.batch_id || lightboxJob.group_id) && (
-                  <button
-                    onClick={() => faceSwapGroup(lightboxJob)}
-                    disabled={faceSwapping}
-                    className="px-4 py-2 bg-blue-700 hover:bg-blue-800 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg text-sm font-medium"
-                  >
-                    {faceSwapping ? '⏳ Swapping...' : '👥 Face Swap All in Group'}
-                  </button>
-                )}
 
                 {/* Edit Dropdown */}
                 <div className="relative">
@@ -1850,6 +2340,228 @@ export default function Gallery() {
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-medium"
               >
                 {processing ? '⏳ Generating...' : `📸 Generate ${carouselNumImages}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reel Generation Modal */}
+      {showReelModal && startImage && (
+        <div
+          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
+          onClick={closeReelModal}
+        >
+          <div
+            className="bg-gray-900 rounded-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-2xl font-bold mb-4">🎬 Create Video Reel</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              Generate a smooth video transition using AI (Kling 2.1 or WAN 2.2)
+            </p>
+
+            {/* Preview Images */}
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div>
+                <div className="text-sm font-medium mb-2 text-purple-400">Start Frame</div>
+                <img
+                  src={startImage.image_url}
+                  alt="Start frame"
+                  className="w-full aspect-square object-cover rounded-lg border-2 border-purple-500"
+                />
+              </div>
+              {endImage && (
+                <div>
+                  <div className="text-sm font-medium mb-2 text-blue-400">End Frame</div>
+                  <img
+                    src={endImage.image_url}
+                    alt="End frame"
+                    className="w-full aspect-square object-cover rounded-lg border-2 border-blue-500"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {/* Positive Prompt */}
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Video Prompt {generatingPrompts && <span className="text-blue-400">⏳ Generating with Grok...</span>}
+                </label>
+                <textarea
+                  value={reelPrompt}
+                  onChange={(e) => setReelPrompt(e.target.value)}
+                  placeholder="Describe the video motion and transition..."
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-blue-500 focus:outline-none min-h-[100px]"
+                  disabled={generatingPrompts}
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Describe the movement, camera motion, and transition between frames
+                </p>
+              </div>
+
+              {/* Negative Prompt */}
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Negative Prompt (things to avoid)
+                </label>
+                <textarea
+                  value={reelNegativePrompt}
+                  onChange={(e) => setReelNegativePrompt(e.target.value)}
+                  placeholder="blurry, distorted, unnatural movement..."
+                  className="w-full px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 focus:border-blue-500 focus:outline-none min-h-[80px]"
+                  disabled={generatingPrompts}
+                />
+              </div>
+
+              {/* Duration */}
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Duration: {reelDuration} seconds
+                </label>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setReelDuration(5)}
+                    className={`flex-1 px-4 py-2 rounded-lg border ${
+                      reelDuration === 5
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:bg-gray-700'
+                    }`}
+                  >
+                    5 seconds
+                  </button>
+                  <button
+                    onClick={() => setReelDuration(10)}
+                    className={`flex-1 px-4 py-2 rounded-lg border ${
+                      reelDuration === 10
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:bg-gray-700'
+                    }`}
+                  >
+                    10 seconds
+                  </button>
+                </div>
+              </div>
+
+              {/* Quality Mode */}
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Quality Mode
+                </label>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setReelQuality('standard')}
+                    disabled={endImage}
+                    className={`flex-1 px-4 py-2 rounded-lg border ${
+                      reelQuality === 'standard'
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : endImage
+                        ? 'bg-gray-900 border-gray-800 text-gray-600 cursor-not-allowed'
+                        : 'bg-gray-800 border-gray-700 hover:bg-gray-700'
+                    }`}
+                  >
+                    <div className="font-medium">Standard</div>
+                    <div className="text-xs text-gray-400">720p</div>
+                  </button>
+                  <button
+                    onClick={() => setReelQuality('pro')}
+                    className={`flex-1 px-4 py-2 rounded-lg border ${
+                      reelQuality === 'pro'
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:bg-gray-700'
+                    }`}
+                  >
+                    <div className="font-medium">Pro</div>
+                    <div className="text-xs text-gray-400">1080p</div>
+                  </button>
+                </div>
+                {endImage && (
+                  <p className="text-xs text-blue-400 mt-2 font-medium">
+                    ℹ️ Pro mode (1080p) is required when using both start and end frames
+                  </p>
+                )}
+                {!endImage && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    💡 Select only start frame for Standard mode, or add end frame for Pro mode transitions
+                  </p>
+                )}
+              </div>
+
+              {/* Video Provider */}
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Video Generation Provider
+                </label>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setReelProvider('kling')}
+                    className={`flex-1 px-4 py-2 rounded-lg border ${
+                      reelProvider === 'kling'
+                        ? 'bg-purple-600 border-purple-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:bg-gray-700'
+                    }`}
+                  >
+                    <div className="font-medium">Kling 2.1</div>
+                    <div className="text-xs text-gray-400">Instagram Reels</div>
+                  </button>
+                  <button
+                    onClick={() => setReelProvider('wavespeed')}
+                    className={`flex-1 px-4 py-2 rounded-lg border ${
+                      reelProvider === 'wavespeed'
+                        ? 'bg-purple-600 border-purple-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:bg-gray-700'
+                    }`}
+                  >
+                    <div className="font-medium">WAN 2.2</div>
+                    <div className="text-xs text-gray-400">NSFW Content</div>
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  {reelProvider === 'kling'
+                    ? '📱 Instagram Reel focused - Fashion-forward, professional modeling transitions'
+                    : '🔞 NSFW focused - Sensual, intimate movements and transitions'}
+                </p>
+              </div>
+
+              {/* Generate Prompt Button */}
+              <div>
+                <button
+                  onClick={generateReelPrompts}
+                  disabled={generatingPrompts}
+                  className="w-full px-4 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {generatingPrompts ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                      Analyzing images with Grok Vision...
+                    </>
+                  ) : (
+                    <>
+                      ✨ Generate Prompt with Grok Vision
+                    </>
+                  )}
+                </button>
+                <p className="text-xs text-gray-400 mt-2 text-center">
+                  Click to analyze both images and generate a realistic transition prompt
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={closeReelModal}
+                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium"
+                disabled={submittingReel}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitReelGeneration}
+                disabled={submittingReel || generatingPrompts || !reelPrompt.trim()}
+                className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-medium"
+              >
+                {submittingReel ? '⏳ Submitting...' : '🎬 Generate Video'}
               </button>
             </div>
           </div>

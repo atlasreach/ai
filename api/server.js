@@ -316,7 +316,7 @@ app.get('/api/gallery-images', async (req, res) => {
 
     const { data: images } = await query
       .order('created_at', { ascending: false })
-      .limit(200)
+      .limit(1000000)
 
     res.json(images || [])
   } catch (error) {
@@ -1689,7 +1689,738 @@ app.post('/api/gallery-images/:id/face-swap-group', async (req, res) => {
   }
 })
 
+// ==============================================================
+// VIDEO GENERATION (KLING 2.1) ENDPOINTS
+// ==============================================================
+
+// POST /api/generate-video-prompt - Generate prompts from images using Grok
+app.post('/api/generate-video-prompt', async (req, res) => {
+  try {
+    const { startImageId, endImageId, provider = 'kling' } = req.body
+
+    if (!startImageId || !endImageId) {
+      return res.status(400).json({ error: 'startImageId and endImageId are required' })
+    }
+
+    // Fetch both images
+    const { data: startImg, error: startError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', startImageId)
+      .single()
+
+    if (startError || !startImg) {
+      console.error('Start image error:', startError)
+      return res.status(404).json({ error: 'Start image not found' })
+    }
+
+    const { data: endImg, error: endError } = await supabase
+      .from('generated_images')
+      .select('*')
+      .eq('id', endImageId)
+      .single()
+
+    if (endError || !endImg) {
+      console.error('End image error:', endError)
+      return res.status(404).json({ error: 'End image not found' })
+    }
+
+    console.log(`Calling Grok Vision API with images for provider: ${provider}...`)
+    console.log('Start image:', startImg.image_url)
+    console.log('End image:', endImg.image_url)
+
+    // Generate provider-specific prompt
+    let grokPrompt
+
+    if (provider === 'wavespeed') {
+      // WAN 2.2 - NSFW focused, intimate content
+      grokPrompt = `You are an expert video prompt generator for AI-powered NSFW/adult video generation using WAN 2.2.
+
+I'm showing you TWO images of a model:
+- IMAGE 1: The START frame (first image below)
+- IMAGE 2: The END frame (second image below)
+
+ANALYZE THESE IMAGES VISUALLY and describe the REALISTIC PHYSICAL TRANSITION between them.
+
+WHAT TO ANALYZE:
+- Starting pose, body position, clothing, facial expression
+- Ending pose, body position, clothing, facial expression
+- What PHYSICAL ACTION would naturally connect these two poses?
+
+CRITICAL: Focus on what the MODEL DOES, not what the camera does!
+- DON'T say: "camera slowly shifts" or "camera zooms"
+- DO say: "she turns her body", "she leans back", "she adjusts her hair", "she shifts her weight"
+
+NSFW/ADULT CONTENT FOCUS:
+✓ Sensual, intimate movements
+✓ Natural body language and expressions
+✓ Suggestive but realistic transitions
+✓ Focus on the model's actions and adjustments
+✓ Describe clothing changes or reveals if applicable
+
+TASK: Describe the REALISTIC ACTION the model performs to go from the first pose to the second pose.
+Think: What would she actually DO to get from pose A to pose B?
+
+Return ONLY a JSON object:
+{
+  "positive_prompt": "Describe the model's physical actions/movements to transition from start to end. Be specific about body movements, not camera movements. Focus on sensual, intimate actions. 2-3 sentences.",
+  "negative_prompt": "static image, camera movement, zoom, pan, shift, unrealistic morphing, distorted body, bad anatomy, jerky motion, artificial transition"
+}
+
+Make it REALISTIC based on what the model would actually DO!`
+    } else {
+      // Kling 2.1 - Instagram Reel focused
+      grokPrompt = `You are an expert video prompt generator for AI-powered Instagram Reels using Kling 2.1.
+
+I'm showing you TWO images of a model:
+- IMAGE 1: The START frame (first image below)
+- IMAGE 2: The END frame (second image below)
+
+ANALYZE THESE IMAGES VISUALLY and describe the REALISTIC PHYSICAL TRANSITION between them.
+
+WHAT TO ANALYZE:
+- Starting pose, body position, clothing, facial expression
+- Ending pose, body position, clothing, facial expression
+- What PHYSICAL ACTION would naturally connect these two poses?
+
+CRITICAL: Focus on what the MODEL DOES, not what the camera does!
+- DON'T say: "camera slowly shifts" or "camera zooms"
+- DO say: "she turns to face the camera", "she tosses her hair", "she adjusts her outfit", "she strikes a new pose"
+
+INSTAGRAM REEL STYLE:
+✓ Fashion-forward, confident movements
+✓ Natural, engaging transitions
+✓ Professional modeling actions
+✓ Describe what the model actually does
+✓ Include subtle camera work only if needed
+
+TASK: Describe the REALISTIC ACTION the model performs to go from the first pose to the second pose.
+Think: What would a model actually DO in a photoshoot to get from pose A to pose B?
+
+Return ONLY a JSON object:
+{
+  "positive_prompt": "Describe the model's physical actions/movements to transition from start to end. Be specific about body movements, not camera movements. Focus on natural modeling actions. 2-3 sentences.",
+  "negative_prompt": "static image, unmotivated camera movement, unrealistic morphing, distorted body, bad anatomy, jerky motion, artificial transition"
+}
+
+Make it REALISTIC based on what the model would actually DO!`
+    }
+
+    // Use Grok Vision with image URLs
+    const grokResponse = await axios.post(
+      'https://api.x.ai/v1/chat/completions',
+      {
+        model: 'grok-2-vision-1212',  // Grok Vision model
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: grokPrompt
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: startImg.image_url
+                }
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: endImg.image_url
+                }
+              }
+            ]
+          }
+        ],
+        temperature: 0.7
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GROK_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const grokContent = grokResponse.data.choices[0].message.content
+    // Try to extract JSON from the response
+    const jsonMatch = grokContent.match(/\{[\s\S]*\}/)
+    const prompts = jsonMatch ? JSON.parse(jsonMatch[0]) : {
+      positive_prompt: grokContent,
+      negative_prompt: 'blurry, distorted, unnatural movement, bad quality, choppy, laggy'
+    }
+
+    res.json({
+      success: true,
+      startImage: {
+        id: startImg.id,
+        url: startImg.image_url,
+        prompt: startImg.prompt_used
+      },
+      endImage: {
+        id: endImg.id,
+        url: endImg.image_url,
+        prompt: endImg.prompt_used
+      },
+      ...prompts
+    })
+  } catch (error) {
+    console.error('Generate video prompt error:', error.response?.data || error)
+    res.status(500).json({
+      error: 'Failed to generate video prompts',
+      details: error.message
+    })
+  }
+})
+
+// POST /api/generate-video - Submit video generation to Kling 2.1 or WAN 2.2
+app.post('/api/generate-video', async (req, res) => {
+  try {
+    const {
+      startImageId,
+      endImageId,
+      modelId,
+      positivePrompt,
+      negativePrompt,
+      duration,
+      mode,
+      provider = 'kling'  // 'kling' or 'wavespeed'
+    } = req.body
+
+    if (!startImageId || !positivePrompt) {
+      return res.status(400).json({ error: 'startImageId and positivePrompt are required' })
+    }
+
+    // Fetch images to get URLs
+    const { data: startImg } = await supabase
+      .from('generated_images')
+      .select('id, image_url, storage_path')
+      .eq('id', startImageId)
+      .single()
+
+    if (!startImg) {
+      return res.status(404).json({ error: 'Start image not found' })
+    }
+
+    let endImg = null
+    if (endImageId) {
+      const { data } = await supabase
+        .from('generated_images')
+        .select('id, image_url, storage_path')
+        .eq('id', endImageId)
+        .single()
+      endImg = data
+    }
+
+    // Create job record first
+    const { data: job, error: jobError } = await supabase
+      .from('video_generation_jobs')
+      .insert({
+        start_image_id: startImageId,
+        end_image_id: endImageId || null,
+        model_id: modelId,
+        positive_prompt: positivePrompt,
+        negative_prompt: negativePrompt || '',
+        duration: duration || 5,
+        mode: mode || 'standard',
+        provider: provider,
+        status: 'pending'
+      })
+      .select()
+      .single()
+
+    if (jobError) {
+      console.error('Job creation error:', jobError)
+      return res.status(500).json({ error: 'Failed to create job', details: jobError.message })
+    }
+
+    let externalId = null
+
+    if (provider === 'wavespeed') {
+      // Submit to WaveSpeedAI WAN 2.2
+      const wavespeedPayload = {
+        duration: duration || 5,
+        image: startImg.image_url,
+        prompt: positivePrompt,
+        negative_prompt: negativePrompt || '',
+        seed: -1,
+        high_noise_loras: [],
+        low_noise_loras: [],
+        loras: []
+      }
+
+      if (endImg) {
+        wavespeedPayload.last_image = endImg.image_url
+      }
+
+      console.log('Submitting to WaveSpeedAI WAN 2.2:', wavespeedPayload)
+
+      try {
+        const wavespeedResponse = await axios.post(
+          'https://api.wavespeed.ai/api/v3/wavespeed-ai/wan-2.2/i2v-720p-lora',
+          wavespeedPayload,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`
+            }
+          }
+        )
+
+        console.log('WaveSpeedAI response:', JSON.stringify(wavespeedResponse.data, null, 2))
+
+        externalId = wavespeedResponse.data.data?.id || wavespeedResponse.data.id
+
+        if (!externalId) {
+          throw new Error(`No ID in WaveSpeedAI response: ${JSON.stringify(wavespeedResponse.data)}`)
+        }
+
+        console.log(`WaveSpeedAI request submitted. ID: ${externalId}`)
+
+        // Update job with WaveSpeedAI ID
+        await supabase
+          .from('video_generation_jobs')
+          .update({
+            replicate_id: externalId,  // Using replicate_id field for WaveSpeedAI ID too
+            status: 'processing',
+            metadata: { wavespeed_input: wavespeedPayload, wavespeed_response: wavespeedResponse.data }
+          })
+          .eq('id', job.id)
+      } catch (wavespeedError) {
+        console.error('WaveSpeedAI API Error:', {
+          message: wavespeedError.message,
+          status: wavespeedError.response?.status,
+          statusText: wavespeedError.response?.statusText,
+          data: wavespeedError.response?.data,
+          headers: wavespeedError.response?.headers
+        })
+
+        // Update job to failed
+        await supabase
+          .from('video_generation_jobs')
+          .update({
+            status: 'failed',
+            metadata: {
+              error: wavespeedError.message,
+              error_response: wavespeedError.response?.data
+            }
+          })
+          .eq('id', job.id)
+
+        throw new Error(`WaveSpeedAI API Error: ${wavespeedError.response?.data?.message || wavespeedError.message}`)
+      }
+
+    } else {
+      // Submit to Replicate Kling 2.1 API
+      const replicateInput = {
+        prompt: positivePrompt,
+        start_image: startImg.image_url,
+        duration: duration || 5,
+        mode: mode || 'standard'
+      }
+
+      if (negativePrompt) {
+        replicateInput.negative_prompt = negativePrompt
+      }
+
+      // IMPORTANT: end_image parameter requires 'pro' mode
+      if (endImg) {
+        replicateInput.end_image = endImg.image_url
+        // Force pro mode if end image is provided
+        if (mode !== 'pro') {
+          console.log('⚠️  Forcing pro mode because end_image is provided (required by Kling API)')
+          replicateInput.mode = 'pro'
+        }
+      }
+
+      console.log('Submitting to Kling 2.1:', replicateInput)
+
+      const prediction = await replicate.predictions.create({
+        model: 'kwaivgi/kling-v2.1',
+        input: replicateInput
+      })
+
+      externalId = prediction.id
+
+      // Update job with Replicate ID
+      await supabase
+        .from('video_generation_jobs')
+        .update({
+          replicate_id: prediction.id,
+          status: 'processing',
+          metadata: { replicate_input: replicateInput }
+        })
+        .eq('id', job.id)
+    }
+
+    res.json({
+      success: true,
+      jobId: job.id,
+      externalId: externalId,
+      provider: provider,
+      status: 'processing'
+    })
+  } catch (error) {
+    console.error('Generate video error:', error)
+    res.status(500).json({
+      error: 'Failed to generate video',
+      details: error.message
+    })
+  }
+})
+
+// GET /api/video-jobs - List all video generation jobs
+app.get('/api/video-jobs', async (req, res) => {
+  try {
+    const { status, limit } = req.query
+
+    let query = supabase
+      .from('video_generation_jobs')
+      .select(`
+        *,
+        start_image:start_image_id (id, image_url, storage_path),
+        end_image:end_image_id (id, image_url, storage_path),
+        model:model_id (id, name, slug)
+      `)
+      .order('created_at', { ascending: false })
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    if (limit) {
+      query = query.limit(parseInt(limit))
+    }
+
+    const { data, error } = await query
+
+    if (error) throw error
+
+    res.json(data || [])
+  } catch (error) {
+    console.error('Fetch video jobs error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// GET /api/video-jobs/:id - Get single video job with details
+app.get('/api/video-jobs/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const { data: job, error } = await supabase
+      .from('video_generation_jobs')
+      .select(`
+        *,
+        start_image:start_image_id (id, image_url, storage_path, prompt_used),
+        end_image:end_image_id (id, image_url, storage_path, prompt_used),
+        model:model_id (id, name, slug)
+      `)
+      .eq('id', id)
+      .single()
+
+    if (error || !job) {
+      return res.status(404).json({ error: 'Video job not found' })
+    }
+
+    res.json(job)
+  } catch (error) {
+    console.error('Fetch video job error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// POST /api/video-jobs/:id/check - Check status and update from provider (Kling or WaveSpeedAI)
+app.post('/api/video-jobs/:id/check', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Fetch job
+    const { data: job, error: jobError } = await supabase
+      .from('video_generation_jobs')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (jobError || !job) {
+      return res.status(404).json({ error: 'Job not found' })
+    }
+
+    if (!job.replicate_id) {
+      return res.status(400).json({ error: 'No external ID for this job' })
+    }
+
+    let updateData = {}
+    let externalStatus = null
+
+    if (job.provider === 'wavespeed') {
+      // Check WaveSpeedAI status
+      const wavespeedResponse = await axios.get(
+        `https://api.wavespeed.ai/api/v3/predictions/${job.replicate_id}/result`,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.WAVESPEED_API_KEY}`
+          }
+        }
+      )
+
+      const result = wavespeedResponse.data.data
+      externalStatus = result.status
+
+      console.log(`Video job ${id} (WaveSpeedAI) status:`, externalStatus)
+
+      updateData = {
+        status: result.status === 'completed' ? 'completed' :
+                result.status === 'failed' ? 'failed' : 'processing'
+      }
+
+      if (result.status === 'completed' && result.outputs && result.outputs.length > 0) {
+        updateData.video_url = result.outputs[0]
+        updateData.completed_at = new Date().toISOString()
+      }
+
+      if (result.status === 'failed') {
+        updateData.error = result.error || 'Video generation failed'
+        updateData.completed_at = new Date().toISOString()
+      }
+
+    } else {
+      // Check Replicate Kling status
+      const prediction = await replicate.predictions.get(job.replicate_id)
+      externalStatus = prediction.status
+
+      console.log(`Video job ${id} (Kling) status:`, externalStatus)
+
+      updateData = {
+        status: prediction.status === 'succeeded' ? 'completed' :
+                prediction.status === 'failed' ? 'failed' : 'processing'
+      }
+
+      if (prediction.status === 'succeeded' && prediction.output) {
+        updateData.video_url = prediction.output
+        updateData.completed_at = new Date().toISOString()
+      }
+
+      if (prediction.status === 'failed') {
+        updateData.error = prediction.error || 'Video generation failed'
+        updateData.completed_at = new Date().toISOString()
+      }
+    }
+
+    // Update job in database
+    const { error: updateError } = await supabase
+      .from('video_generation_jobs')
+      .update(updateData)
+      .eq('id', id)
+
+    if (updateError) {
+      console.error('Update error:', updateError)
+    }
+
+    res.json({
+      success: true,
+      status: updateData.status,
+      videoUrl: updateData.video_url,
+      error: updateData.error,
+      provider: job.provider,
+      externalStatus: externalStatus
+    })
+  } catch (error) {
+    console.error('Check video job error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ==============================================================
+// AUTOMATIC JOB POLLING - Checks processing jobs every 8 seconds
+// ==============================================================
+
+async function checkProcessingJob(job) {
+  try {
+    // First check if still in queue
+    let queueResponse
+    try {
+      queueResponse = await axios.get(
+        `${COMFYUI_API_URL}/queue`,
+        {
+          headers: {
+            'Authorization': `Bearer ${RUNPOD_API_KEY}`
+          }
+        }
+      )
+    } catch (queueError) {
+      // Queue check failed, continue to history check
+    }
+
+    // Check if job is still queued or executing
+    if (queueResponse?.data) {
+      const allQueuedJobs = [...(queueResponse.data.queue_running || []), ...(queueResponse.data.queue_pending || [])]
+      const isQueued = allQueuedJobs.some(item => item[1] === job.runpod_job_id || item[2]?.client_id === `job_${job.id}`)
+
+      if (isQueued) {
+        return 'still_processing'
+      }
+    }
+
+    // Check history for completed jobs
+    const historyResponse = await axios.get(
+      `${COMFYUI_API_URL}/history/${job.runpod_job_id}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${RUNPOD_API_KEY}`
+        }
+      }
+    )
+
+    const history = historyResponse.data[job.runpod_job_id]
+
+    if (history && history.status?.completed) {
+      // Job completed, get the output image
+      const outputs = history.outputs
+
+      // Find the SaveImage node output (node 12 in our workflow)
+      let supabaseImageUrl = null
+      let storagePath = null
+      if (outputs['12']?.images?.[0]) {
+        const image = outputs['12'].images[0]
+        const comfyImageUrl = `${COMFYUI_API_URL}/view?filename=${image.filename}&subfolder=${image.subfolder || ''}&type=${image.type || 'output'}`
+
+        try {
+          // Download image from ComfyUI
+          const imageResponse = await axios.get(comfyImageUrl, {
+            headers: { 'Authorization': `Bearer ${RUNPOD_API_KEY}` },
+            responseType: 'arraybuffer'
+          })
+
+          // Upload to Supabase Storage
+          const imageBuffer = Buffer.from(imageResponse.data)
+          storagePath = `${image.filename}`
+
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('generated-images')
+            .upload(storagePath, imageBuffer, {
+              contentType: 'image/png',
+              upsert: true
+            })
+
+          if (uploadError) {
+            console.error('Supabase upload error:', uploadError)
+            supabaseImageUrl = comfyImageUrl // Fallback to ComfyUI URL
+          } else {
+            // Get public URL
+            const { data: publicUrlData } = supabase.storage
+              .from('generated-images')
+              .getPublicUrl(storagePath)
+
+            supabaseImageUrl = publicUrlData.publicUrl
+          }
+        } catch (downloadError) {
+          console.error('Image download/upload error:', downloadError)
+          supabaseImageUrl = comfyImageUrl // Fallback to ComfyUI URL
+        }
+      }
+
+      // Update job
+      await supabase
+        .from('generation_jobs')
+        .update({
+          status: 'completed',
+          result_image_url: supabaseImageUrl,
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', job.id)
+
+      // Insert into generated_images for gallery
+      const { data: updatedJob } = await supabase
+        .from('generation_jobs')
+        .select('*, models(name, slug), reference_images(filename, vision_description)')
+        .eq('id', job.id)
+        .single()
+
+      if (updatedJob) {
+        await supabase
+          .from('generated_images')
+          .insert({
+            job_id: updatedJob.id,
+            model_id: updatedJob.model_id,
+            reference_image_id: updatedJob.reference_image_id,
+            image_url: supabaseImageUrl,
+            storage_path: storagePath,
+            prompt_used: updatedJob.prompt_used,
+            negative_prompt_used: updatedJob.negative_prompt_used,
+            parameters: updatedJob.parameters,
+            model_name: updatedJob.models?.name,
+            model_slug: updatedJob.models?.slug,
+            reference_filename: updatedJob.reference_images?.filename,
+            reference_caption: updatedJob.reference_images?.vision_description,
+            generated_at: updatedJob.completed_at,
+            batch_id: updatedJob.batch_id
+          })
+      }
+
+      console.log(`✓ Job ${job.id} completed and saved to gallery`)
+      return 'completed'
+    } else if (history?.status?.status_str === 'error') {
+      await supabase
+        .from('generation_jobs')
+        .update({
+          status: 'failed',
+          error_message: 'ComfyUI error'
+        })
+        .eq('id', job.id)
+
+      console.log(`✗ Job ${job.id} failed`)
+      return 'failed'
+    } else {
+      return 'still_processing'
+    }
+  } catch (error) {
+    console.error(`Error checking job ${job.id}:`, error.message)
+    return 'error'
+  }
+}
+
+async function pollProcessingJobs() {
+  try {
+    // Fetch all processing jobs
+    const { data: jobs } = await supabase
+      .from('generation_jobs')
+      .select('*')
+      .eq('status', 'processing')
+      .order('created_at', { ascending: true })
+      .limit(50)
+
+    if (jobs && jobs.length > 0) {
+      console.log(`⏳ Checking ${jobs.length} processing jobs...`)
+
+      // Check jobs sequentially to avoid overwhelming the API
+      for (const job of jobs) {
+        await checkProcessingJob(job)
+        // Small delay between checks
+        await new Promise(resolve => setTimeout(resolve, 200))
+      }
+    }
+  } catch (error) {
+    console.error('Job polling error:', error.message)
+  }
+}
+
+// Start automatic polling every 8 seconds
+let pollingInterval
+function startJobPolling() {
+  console.log('🤖 Starting automatic job polling (every 8 seconds)...')
+  pollingInterval = setInterval(pollProcessingJobs, 8000)
+  // Run once immediately
+  pollProcessingJobs()
+}
+
+// ==============================================================
+
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
+  // Start automatic job polling
+  startJobPolling()
 })
